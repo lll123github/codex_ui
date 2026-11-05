@@ -67,8 +67,12 @@ export class ClaudeService {
   }
   owns(id: string): boolean { return !!this.storage.get(id); }
   private refreshUsageCache() {
-    if (this.config.usageCacheFile) this.usage.readCache(this.config.usageCacheFile,
-      Object.keys(this.config.users).flatMap(user => this.bindings.list(user)));
+    if (!this.config.usageCacheFile) return;
+    const users = this.config.sharedUsers
+      ? this.store.listUsers().map(user => user.id)
+      : Object.keys(this.config.users ?? {});
+    this.usage.readCache(this.config.usageCacheFile,
+      users.flatMap(user => this.bindings.list(user)));
   }
   usageStatus(userId: string): ReclaudeUsageStatus {
     return { thresholdPercent: 99, accounts: this.bindings.list(userId).map(binding => this.usage.status(binding)),
