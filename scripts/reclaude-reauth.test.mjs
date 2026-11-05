@@ -21,6 +21,7 @@ fs.writeFileSync(path.join(home,'client-pid'),String(process.pid));
 console.error('private-fixture-key-never-expose');
 const url='https://reclaude.ai/cli/auth?state=fixture-complete-state';
 if(mode==='browser'){spawnSync('xdg-open',[url],{stdio:'inherit'});process.exit(0);}
+if(mode==='browser-silent-hold'){spawnSync('xdg-open',[url],{stdio:'ignore'});setInterval(()=>{},1000);return;}
 process.stdout.write('https://reclaude.ai/cli/auth?state=fixture-');
 setTimeout(()=>{process.stdout.write('complete-state\\n');if(mode!=='hold')setTimeout(()=>process.exit(0),20);},20);
 if(mode==='hold')setInterval(()=>{},1000);
@@ -41,6 +42,19 @@ test("runs scoped logout/login and waits for a complete URL line without leaking
 test("captures the CLI browser opener instead of opening a browser on the server",async()=>{
   const events=[];await reauthenticate(await fixture("browser"),event=>events.push(event));
   assert.equal(events.filter(event=>event.type==="authorization").length,1);
+});
+test("captures approval before a silent browser opener's login client exits",async()=>{
+  const options=await fixture("browser-silent-hold"),controller=new AbortController(),events=[];
+  const timeout=setTimeout(()=>controller.abort(),4000);
+  try {
+    await assert.rejects(reauthenticate({...options,signal:controller.signal},event=>{
+      events.push(event);if(event.type==='authorization')controller.abort();
+    }),/cancelled/);
+    assert.deepEqual(events.filter(event=>event.type==='authorization'),[{type:'authorization',url:'https://reclaude.ai/cli/auth?state=fixture-complete-state'}]);
+    assert.ok(!JSON.stringify(events).includes('private-fixture-key'));
+    const pid=Number(await fs.readFile(path.join(options.home,'client-pid'),'utf8'));
+    assert.throws(()=>process.kill(pid,0),{code:'ESRCH'});
+  } finally {clearTimeout(timeout);}
 });
 test("binds the same organization when logout removed the selected local binding",async()=>{
   const options=await fixture("unbound");await reauthenticate(options,()=>{});
