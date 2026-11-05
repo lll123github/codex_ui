@@ -1,6 +1,7 @@
 import { modelIsAvailable, CLAUDE_NOT_CONNECTED, isReclaudeModel, claudePendingProfiles } from "../shared/agentRuntime";
 import { RuntimeMigrationDialog } from "./RuntimeMigrationDialog";
 import { ReclaudeUsage, useReclaudeUsage } from "./ReclaudeUsage";
+import { ReclaudeAuthorizationDialog } from "./ReclaudeAuthorization";
 import { ReclaudeQuotaDetails, reclaudeRemainingLabel } from "./reclaudeQuota";
 import type { ReclaudeUsageStatus } from "../shared/reclaudeUsage";
 import {runtimeModelLabel,runtimeModelTriggerLabel} from "./runtimeModelLabel";
@@ -3910,7 +3911,7 @@ function accountRemainingLabel(account: CodexAccountPoolAccount): string {
   return remaining === null ? "--" : `${percentText(remaining)}%`;
 }
 
-function QuotaPopover({ quota, pool, loading, closing, userId, reclaudeStatus, currentClaudeOrgId }: { quota: CodexQuota | null; pool: CodexAccountPool | null; loading: boolean; closing: boolean; userId: string; reclaudeStatus: ReclaudeUsageStatus | null; currentClaudeOrgId?: string }) {
+function QuotaPopover({ quota, pool, loading, closing, userId, reclaudeStatus, currentClaudeOrgId, onReauthenticate }: { quota: CodexQuota | null; pool: CodexAccountPool | null; loading: boolean; closing: boolean; userId: string; reclaudeStatus: ReclaudeUsageStatus | null; currentClaudeOrgId?: string; onReauthenticate:(orgId?:string)=>void }) {
   const providerQuotas = useProviderQuotas(userId);
   const quotaAccounts = pool?.accounts.filter((entry) => entry.kind !== "api-provider") ?? [];
   const claudeAccounts = reclaudeStatus?.accounts ?? [];
@@ -3977,6 +3978,7 @@ function QuotaPopover({ quota, pool, loading, closing, userId, reclaudeStatus, c
           ) : null}
         </>
       ) : selectedQuota ? <AccountQuotaDetails quota={selectedQuota} /> : <p>{loading ? "正在读取额度…" : "暂未读取到额度"}</p>}
+      {reclaudeStatus ? <button className="reclaudeAuthEntry" type="button" onClick={() => onReauthenticate(selectedClaude?.orgId)}>重新认证 ReClaude</button> : null}
     </section>
   );
 }
@@ -4861,6 +4863,7 @@ export function App() {
   const [contextPinSaving, setContextPinSaving] = useState(false);
   const [modelProfiles, setModelProfiles] = useState<ModelProfile[]>(fallbackModelProfiles);
   const {status:reclaudeUsage,receive:receiveReclaudeUsage}=useReclaudeUsage(selectedUserId);
+  const [reclaudeAuthTarget,setReclaudeAuthTarget]=useState<{orgId?:string}|null>(null);
   useEffect(()=>{
     if(!reclaudeUsage)return;
     setModelProfiles(current=>current.map(profile=>{
@@ -11535,6 +11538,7 @@ function getRunningTurnIdForThread(thread?: ThreadSummary | null): string | null
   }
   const showPromptNavigator = promptNavigationItems.length > 0 || Boolean(selectedThread && threadHistory?.hasOlder);
   const globalEnterSendBlocked = Boolean(
+    reclaudeAuthTarget ||
     notificationSettingsPresence.present ||
     settingsPresence.present ||
     globalSearchPresence.present ||
@@ -11901,6 +11905,8 @@ function getRunningTurnIdForThread(thread?: ThreadSummary | null): string | null
         )}
       />
 
+      {reclaudeAuthTarget ? <ReclaudeAuthorizationDialog key={selectedUserId} orgId={reclaudeAuthTarget.orgId}
+        onClose={()=>setReclaudeAuthTarget(null)} onAuthenticated={()=>{void refreshModels();window.dispatchEvent(new Event("reclaude-authenticated"));}}/> : null}
       {runtimeMigration?<RuntimeMigrationDialog key={runtimeMigration.thread.id} threadId={runtimeMigration.thread.id} projectId={runtimeMigration.projectId}
         name={runtimeMigration.thread.name??runtimeMigration.thread.preview??"会话"} sourceClaude={isReclaudeModel(runtimeMigration.thread.configuredModel??selectedProject?.defaultModel)}
         profiles={modelProfiles} usageStatus={reclaudeUsage} initialModel={runtimeMigration.initialModel} onClose={()=>setRuntimeMigration(null)}
@@ -12620,7 +12626,8 @@ function getRunningTurnIdForThread(thread?: ThreadSummary | null): string | null
                 {quotaLoading ? "额度..." : quotaSummaryLabel(quota, accountPool)}
                 <ComposerGlassMaterial variant="topbar" />
               </button>
-              {quotaPopoverPresence.present ? <QuotaPopover userId={selectedUserId} quota={quota} pool={accountPool} loading={quotaLoading} closing={quotaPopoverPresence.closing} reclaudeStatus={reclaudeUsage} currentClaudeOrgId={isReclaudeModel(selectedModelProfile.model)?selectedModelProfile.model.split("@")[1]:undefined} /> : null}
+              {quotaPopoverPresence.present ? <QuotaPopover userId={selectedUserId} quota={quota} pool={accountPool} loading={quotaLoading} closing={quotaPopoverPresence.closing} reclaudeStatus={reclaudeUsage} currentClaudeOrgId={isReclaudeModel(selectedModelProfile.model)?selectedModelProfile.model.split("@")[1]:undefined}
+                onReauthenticate={orgId=>{setReclaudeAuthTarget({orgId});setQuotaPopoverPinned(false);setQuotaPopoverOpen(false);}} /> : null}
             </div>
             <button
               className="leaderboardButton"

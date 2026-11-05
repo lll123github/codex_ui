@@ -58,9 +58,52 @@ function fixture(rateLimitInfo?: Record<string,unknown>, options: {shared?:boole
     await vi.waitFor(()=>expect(service.storage.turn(result.turn.id)?.status).toBe("completed"));
     return result.turn.id;
   };
-  return {home,cwd,project,store,service,config,rootA,rootB,binding,events,calls,start,turn};
+  return {home,cwd,project,store,service,config,rootA,rootB,binding,events,calls,start,turn,runtimeFactory};
 }
 describe("Claude conversation switching",()=>{
+  it("rediscovers history returned to ~/.claude and lazily resumes the same real account in its new device directory",async()=>{
+    const f=fixture(),id=await f.start();await f.turn(id);
+    const before=f.service.storage.get(id)!,owner=f.store.getThreadOwner(id);
+    const legacy=path.join(f.home,".claude");fs.renameSync(f.rootA,legacy);
+    const source=locateClaudeHistory(before.nativeSessionId,[legacy])!,original=fs.readFileSync(source);
+    fs.writeFileSync(path.join(legacy,"settings.json"),'{"secret":"do-not-copy"}');
+    const target=f.binding("33",1,"account-A");
+    await f.service.request("thread/resume",{threadId:id});
+    expect(f.service.storage.get(id)!.configRoot).toBe(before.configRoot);
+    expect(f.calls).toHaveLength(1);
+    await f.turn(id);
+    const after=f.service.storage.get(id)!;
+    expect(after).toMatchObject({id,userId:before.userId,projectId:before.projectId,nativeSessionId:before.nativeSessionId,configRoot:target});
+    expect(f.calls[1].options.resume).toBe(before.nativeSessionId);
+    expect(f.service.storage.quota().used).toBe(1);
+    expect(f.store.getThreadOwner(id)).toEqual(owner);
+    expect(fs.readFileSync(source)).toEqual(original);
+    expect(fs.existsSync(path.join(target,"settings.json"))).toBe(false);
+    expect(f.service.storage.pendingBindingMigrations()).toEqual([]);
+    const lineage=f.service.storage.db.prepare("SELECT thread_id,body FROM lineage WHERE native_id=?").get(before.nativeSessionId) as any;
+    expect(lineage.thread_id).toBe(id);expect(JSON.parse(lineage.body).configRoot).toBe(target);
+  });
+  it("recovers a crash between the main database update and native mapping commit without forking twice",async()=>{
+    const f=fixture(),id=await f.start();await f.turn(id);
+    const before=f.service.storage.get(id)!;
+    vi.spyOn(f.service.storage,"finishBindingMigration").mockImplementationOnce(()=>{throw new Error("fixture database interruption");});
+    await expect(f.service.request("thread/resume",{threadId:id,model:"reclaude-sonnet@2"})).rejects.toMatchObject({code:"claude_migration_pending"});
+    expect(f.service.storage.get(id)!.nativeSessionId).toBe(before.nativeSessionId);
+    expect(f.store.getThreadOwner(id)?.modelOverride).toBe("reclaude-sonnet@2");
+    expect(f.service.storage.pendingBindingMigrations()).toHaveLength(1);
+    expect(f.calls).toHaveLength(1);expect(f.service.storage.quota().used).toBe(2);
+    f.service.close();
+    const reopened=new ClaudeService(f.config,f.store,()=>{},f.runtimeFactory);cleanup.push(()=>reopened.close());
+    vi.spyOn(reopened.bindings,"refresh").mockImplementation(async(user,model)=>reopened.bindings.resolve(user,model));
+    const restored=reopened.storage.get(id)!;
+    expect(restored.nativeSessionId).not.toBe(before.nativeSessionId);
+    expect(f.store.getThreadOwner(id)).toMatchObject({userId:restored.userId,projectId:restored.projectId,rootPath:restored.cwd,modelOverride:restored.model});
+    expect(reopened.storage.pendingBindingMigrations()).toEqual([]);
+    const next=await reopened.request("turn/start",{threadId:id,input:[{type:"text",text:"继续"}]}) as any;
+    await vi.waitFor(()=>expect(reopened.storage.turn(next.turn.id)?.status).toBe("completed"));
+    expect(f.calls[1].options.resume).toBe(restored.nativeSessionId);
+    expect(reopened.storage.quota().used).toBe(2);expect(reopened.history(id).thread.turns).toHaveLength(2);
+  });
   it("shares the five-session budget and account weekly stop across users while retaining workspace ownership",async()=>{
     const f=fixture(undefined,{shared:true});
     const members=["alice","bob"].map(userId=>{
@@ -137,9 +180,12 @@ describe("Claude conversation switching",()=>{
     const newRoot=f.binding("33",1,"account-C");
     const source=locateClaudeHistory(original,[newRoot])!, bytes=fs.readFileSync(source);
     await f.service.request("thread/resume",{threadId:id,model:"reclaude-sonnet@1"});
+    expect(f.service.storage.get(id)!.nativeSessionId).toBe(original);
+    expect(f.service.storage.quota().used).toBe(1);expect(f.calls).toHaveLength(1);
+    await f.turn(id);
     const changed=f.service.storage.get(id)!;
     expect(changed.nativeSessionId).not.toBe(original);expect(changed.parentSessionId).toBe(original);
-    expect(f.service.storage.quota().used).toBe(2);expect(f.calls).toHaveLength(1);
+    expect(f.service.storage.quota().used).toBe(2);expect(f.calls).toHaveLength(2);
     expect(fs.readFileSync(source)).toEqual(bytes);
     await f.turn(id);expect(f.calls[1].options.resume).toBe(changed.nativeSessionId);
     expect(f.service.storage.quota().used).toBe(2);
@@ -196,6 +242,13 @@ describe("Claude conversation switching",()=>{
       const list=await app.inject({method:"GET",url:`/api/projects/${f.project.id}/threads`});expect(list.json().data.some((row:any)=>row.id===id)).toBe(true);
       const usage=await app.inject({method:"GET",url:"/api/reclaude/usage"});
       expect(usage.json().data).toMatchObject({thresholdPercent:99,monitoring:"response-events",creations:{used:1,remaining:4}});
+      const auth=await app.inject({method:"GET",url:"/api/reclaude/authorization"});
+      expect(auth.statusCode).toBe(200);expect(auth.headers["cache-control"]).toContain("no-store");
+      expect(auth.json().data).toMatchObject({enabled:false,operation:null,organizations:expect.arrayContaining([expect.objectContaining({orgId:"1",connected:true})])});
+      expect((await app.inject({method:"POST",url:"/api/reclaude/authorization/start",payload:{}})).statusCode).toBe(400);
+      expect((await app.inject({method:"POST",url:"/api/reclaude/authorization/start",payload:{orgId:"999",requestId:randomUUID()}})).statusCode).toBe(403);
+      expect((await app.inject({method:"POST",url:"/api/reclaude/authorization/start",headers:{"sec-fetch-site":"cross-site"},payload:{orgId:"1",requestId:randomUUID()}})).statusCode).toBe(403);
+      expect((await app.inject({method:"POST",url:"/api/reclaude/authorization/cancel",payload:{id:randomUUID()}})).statusCode).toBe(403);
       for(let i=0;i<4;i++)service.storage.reserve(randomUUID());
       // Pure Codex starts and forks still go to the native bridge at a full Claude quota.
       await bridge.request("thread/start",{model:"gpt-6.1-sol",cwd:f.cwd});

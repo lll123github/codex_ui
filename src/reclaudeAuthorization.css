@@ -1,0 +1,14 @@
+.reclaudeAuthScrim {z-index:1200;}
+.reclaudeAuthDialog {box-sizing:border-box;width:min(460px,calc(100vw - 32px));max-height:calc(100dvh - 40px);overflow:auto;padding:22px;border:1px solid var(--line,rgba(128,128,128,.25));border-radius:18px;background:var(--panel,#202120);color:var(--text,#eee);box-shadow:0 24px 80px #0005;}
+.reclaudeAuthDialog header {display:flex;align-items:center;justify-content:space-between;gap:16px;}
+.reclaudeAuthDialog h2 {margin:0;font-size:18px;}
+.reclaudeAuthDialog p {font-size:14px;line-height:1.6;}
+.reclaudeAuthDialog label {display:grid;gap:8px;font-size:14px;}
+.reclaudeAuthDialog select {width:100%;padding:9px;border-radius:8px;background:var(--panel-strong,#303230);color:inherit;border:1px solid var(--line,#6666);}
+.reclaudeAuthDialog footer {display:flex;justify-content:flex-end;gap:10px;margin-top:22px;flex-wrap:wrap;}
+.reclaudeAuthDialog footer button,.reclaudeAuthEntry {padding:8px 12px;border-radius:9px;border:1px solid var(--line,#6666);background:var(--panel-strong,#303230);color:inherit;cursor:pointer;}
+.reclaudeAuthDialog button:disabled {opacity:.5;cursor:default;}
+.reclaudeAuthDialog a {color:var(--teal,#91b5ff);}
+.reclaudeAuthStatus {margin-top:18px;overflow-wrap:anywhere;}
+.reclaudeAuthError {color:var(--red,#f88);}
+.reclaudeAuthEntry {margin-top:10px;font-size:12px;}

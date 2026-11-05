@@ -10,6 +10,8 @@ import type { VerifiedClaudeBinding } from "./claudeRuntime.js";
 const run = promisify(execFile);
 export interface ClaudeIntegrationConfig {
   home: string; executable: string; storageDirectory: string;
+  /** ReClaude CLI itself, not the Claude process wrapper. Enables web reauth. */
+  reclaudeExecutable?: string;
   /** Legacy bindings used only when a shared pool is not configured. */
   users?: Record<string, { workspaceRoot: string; orgIds: string[] }>;
   /** One account pool for every web user, with separate user workspaces. */
@@ -61,7 +63,7 @@ export class ClaudeBindings {
       this.modelRefreshes.set(key,promise);await promise;
     }
   }
-  list(userId: string): ClaudeBinding[] {
+  private owner(userId: string) {
     const shared = this.config.sharedUsers;
     // Shared pool membership never depends on legacy per-user organization lists.
     let owner = shared ? undefined : this.config.users?.[userId];
@@ -74,6 +76,12 @@ export class ClaudeBindings {
         }
       } catch { /* No existing private workspace; do not grant a broad root. */ }
     }
+    return owner;
+  }
+  orgIds(userId: string): string[] { return this.owner(userId)?.orgIds ?? []; }
+  invalidateModels() { this.modelCheckedAt.clear(); }
+  list(userId: string): ClaudeBinding[] {
+    const owner = this.owner(userId);
     if (!owner) return [];
     const directory = path.join(this.config.home, ".rec", "claude", "accounts");
     if (!fs.existsSync(directory)) return [];
@@ -107,13 +115,23 @@ export class ClaudeBindings {
   }
   async refresh(userId: string, model: string): Promise<ClaudeBinding> {
     const binding = this.resolve(userId, model);
+    await this.refreshOrganization(userId, binding.orgId);
+    return this.resolve(userId, model);
+  }
+  async refreshOrganization(userId: string, orgId: string): Promise<ClaudeBinding> {
+    if (!/^[0-9]+$/.test(orgId) || !this.orgIds(userId).includes(orgId)) throw new AppError("runtime_forbidden", "组织不属于当前共享账号池。");
     // auth status refreshes the wrapper's selected account/config without
-    // creating a conversation or sending a model message.
-    const result = await run(binding.executable, ["auth", "status"], { env: { ...process.env, RECLAUDE_ORG: binding.orgId }, timeout: 60_000, maxBuffer: 256 * 1024 });
+    // creating a conversation. It also bootstraps a newly created device root
+    // before any account UUID or model catalog is assumed to be available.
+    const env: NodeJS.ProcessEnv = { ...process.env, HOME: this.config.home, RECLAUDE_ORG: orgId };
+    delete env.CLAUDE_CONFIG_DIR;
+    const result = await run(this.config.executable, ["auth", "status"], { env, timeout: 60_000, maxBuffer: 256 * 1024 });
     let status: Record<string, unknown>;
     try { status = JSON.parse(result.stdout.slice(result.stdout.indexOf("{"))); } catch { throw new AppError("claude_identity_unverified", "Claude 登录状态无法确认，未启动会话。"); }
     if (status.loggedIn !== true) throw new AppError("authentication_failed", "Claude 账号尚未登录，未启动会话。");
-    const refreshed = this.resolve(userId, model);
+    const matches = this.list(userId).filter(binding => binding.orgId === orgId);
+    if (matches.length !== 1) throw new AppError("claude_identity_unverified", "新登录的 Claude 身份尚未确认，未启动会话。");
+    const refreshed = matches[0];
     if (typeof status.configDirectory !== "string" || fs.realpathSync(status.configDirectory) !== fs.realpathSync(refreshed.configRoot)) {
       throw new AppError("claude_identity_unverified", "客户端选择的 Claude 目录与账号绑定不一致，未启动会话。");
     }
