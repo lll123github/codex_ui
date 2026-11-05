@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ClaudeBindings, type ClaudeIntegrationConfig } from "./claudeBindings.js";
 import { ReclaudeLifecycle } from "./reclaudeLifecycle.js";
 import { ReclaudeAuthorization } from "./reclaudeAuthorization.js";
+import { reclaudeAuthorizationUrl } from "../shared/reclaudeAuthorization.js";
 
 const cleanups:Array<()=>void>=[];
 afterEach(()=>{for(const cleanup of cleanups.splice(0).reverse())cleanup();vi.restoreAllMocks();});
@@ -18,7 +19,7 @@ function fixture() {
 const fs=require('node:fs'),path=require('node:path'),home=process.env.HOME,args=process.argv.slice(2);
 fs.appendFileSync(path.join(home,'calls'),JSON.stringify(args)+'\\n');
 if(args[0]==='logout'){fs.rmSync(path.join(home,'.rec/claude/accounts/11/device.json'),{force:true});process.exit(0);}
-console.log('secret-fixture-never-expose');console.log('https://reclaude.ai/cli/auth?state=manager-fixture');
+console.log('secret-fixture-never-expose');console.log('https://www.recode.cat/cli/auth?state=manager-fixture&p=claude');
 const timer=setInterval(()=>{if(!fs.existsSync(path.join(home,'approve')))return;
 const root=path.join(home,'.rec/claude/accounts/22');fs.mkdirSync(path.join(root,'config'),{recursive:true});
 fs.writeFileSync(path.join(root,'device.json'),JSON.stringify({sk:'fixture-only',org_id:1,org_name:'shared-name'}));
@@ -40,6 +41,14 @@ clearInterval(timer);process.exit(0);},20);
   return{home,config,bindings,lifecycle,snapshot,manager,ready};
 }
 describe("shared ReClaude browser authorization",()=>{
+  it("accepts the current and legacy approval domains and rejects lookalikes",()=>{
+    for(const host of ["www.recode.cat","reclaude.ai"]){
+      const url=`https://${host}/cli/auth?state=fixture&p=claude`;
+      expect(reclaudeAuthorizationUrl(url)).toBe(url);
+    }
+    for(const url of ["https://www.recode.cat.evil.test/cli/auth?state=x","https://evil@www.recode.cat/cli/auth?state=x","https://www.recode.cat/api/devices?state=x","https://www.recode.cat/cli/auth?state=x&token=private"])
+      expect(reclaudeAuthorizationUrl(url)).toBeNull();
+  });
   it("runs one scoped operation, restricts the approval URL to its initiator, and verifies the new binding",async()=>{
     const f=fixture(),id=randomUUID(),old=f.bindings.list("admin")[0].accountKey;
     f.manager.start("admin","1",id);await f.ready();

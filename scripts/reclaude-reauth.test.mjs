@@ -19,7 +19,7 @@ if(args[0]==='logout')process.exit(0);
 if(mode==='unbound'&&args[0]==='login'){console.error('本机还没有绑定组织');process.exit(1);}
 fs.writeFileSync(path.join(home,'client-pid'),String(process.pid));
 console.error('private-fixture-key-never-expose');
-const url='https://reclaude.ai/cli/auth?state=fixture-complete-state';
+const url=mode==='browser-silent-hold'?'https://www.recode.cat/cli/auth?state=fixture-complete-state&p=claude':'https://reclaude.ai/cli/auth?state=fixture-complete-state';
 if(mode==='browser'){spawnSync('xdg-open',[url],{stdio:'inherit'});process.exit(0);}
 if(mode==='browser-silent-hold'){spawnSync('xdg-open',[url],{stdio:'ignore'});setInterval(()=>{},1000);return;}
 process.stdout.write('https://reclaude.ai/cli/auth?state=fixture-');
@@ -30,7 +30,9 @@ if(mode==='hold')setInterval(()=>{},1000);
 }
 test("accepts only the documented HTTPS device approval page",()=>{
   assert.equal(authorizationUrl("https://reclaude.ai/cli/auth?state=ok"),"https://reclaude.ai/cli/auth?state=ok");
+  assert.equal(authorizationUrl("https://www.recode.cat/cli/auth?state=ok&p=claude"),"https://www.recode.cat/cli/auth?state=ok&p=claude");
   for(const url of ["javascript:alert(1)","https://reclaude.ai.evil.test/cli/auth?state=x","https://evil@reclaude.ai/cli/auth?state=x","https://reclaude.ai/api/devices?state=x","https://reclaude.ai/cli/auth?state=x&token=private","https://reclaude.ai/cli/auth"]) assert.equal(authorizationUrl(url),null);
+  for(const url of ["https://www.recode.cat.evil.test/cli/auth?state=x","https://evil@www.recode.cat/cli/auth?state=x","https://www.recode.cat/api/devices?state=x","https://www.recode.cat/cli/auth?state=x&token=private"]) assert.equal(authorizationUrl(url),null);
 });
 test("runs scoped logout/login and waits for a complete URL line without leaking CLI output",async()=>{
   const options=await fixture(),events=[];
@@ -50,7 +52,7 @@ test("captures approval before a silent browser opener's login client exits",asy
     await assert.rejects(reauthenticate({...options,signal:controller.signal},event=>{
       events.push(event);if(event.type==='authorization')controller.abort();
     }),/cancelled/);
-    assert.deepEqual(events.filter(event=>event.type==='authorization'),[{type:'authorization',url:'https://reclaude.ai/cli/auth?state=fixture-complete-state'}]);
+    assert.deepEqual(events.filter(event=>event.type==='authorization'),[{type:'authorization',url:'https://www.recode.cat/cli/auth?state=fixture-complete-state&p=claude'}]);
     assert.ok(!JSON.stringify(events).includes('private-fixture-key'));
     const pid=Number(await fs.readFile(path.join(options.home,'client-pid'),'utf8'));
     assert.throws(()=>process.kill(pid,0),{code:'ESRCH'});

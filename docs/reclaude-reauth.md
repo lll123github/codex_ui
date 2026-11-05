@@ -19,6 +19,8 @@
 
 后台执行 `scripts/reclaude-reauth.mjs`，始终向 `logout` 和 `login` 传入 `--org`。客户端提示本地绑定已移除时，改用同一组织的 `org bind` 完成设备流程。客户端必须支持按组织退出；不支持时操作失败，不降级为退出全部组织。脚本的标准输出只包含状态事件及验证过的认证链接，不转发客户端原始输出或凭据。独立运行示例：
 
+认证链接允许 `reclaude.ai` 和当前客户端使用的 `www.recode.cat`，均要求 HTTPS、`/cli/auth` 路径和有效 `state`。浏览器启动器即使丢弃标准输出，脚本也通过临时私有文件接收链接；操作结束即删除该目录。
+
 ```sh
 node scripts/reclaude-reauth.mjs --client /opt/reclaude/reclaude --home /home/service --org 12345
 ```

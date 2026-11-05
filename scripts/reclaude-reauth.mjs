@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 export function authorizationUrl(value) {
   try {
     const url = new URL(value);
-    if (url.protocol !== "https:" || url.hostname !== "reclaude.ai" || url.port || url.username || url.password
+    if (url.protocol !== "https:" || !["reclaude.ai", "www.recode.cat"].includes(url.hostname) || url.port || url.username || url.password
       || url.pathname !== "/cli/auth" || !url.searchParams.get("state")
       || [...url.searchParams.keys()].some(key => /token|secret|device_code|api.?key/i.test(key))) return null;
     return url.toString();
@@ -51,7 +51,7 @@ export async function reauthenticate({ client, home, orgId, signal }, emit) {
       if (!login) return;
       buffers[stream] = (buffers[stream] + text).slice(-65536);
       const lines = buffers[stream].split(/[\r\n]/); buffers[stream] = lines.pop() ?? "";
-      for (const line of lines) for (const raw of line.match(/https:\/\/reclaude\.ai\/cli\/auth\?[^\s<>"']+/g) ?? []) {
+      for (const line of lines) for (const raw of line.match(/https:\/\/(?:reclaude\.ai|www\.recode\.cat)\/cli\/auth\?[^\s<>"']+/g) ?? []) {
         publishUrl(raw.replace(/[),，。]+$/, ""));
       }
     };

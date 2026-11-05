@@ -20,12 +20,12 @@ try {
       if(!url.pathname.startsWith("/api/reclaude/authorization"))return route.abort();
       if(url.pathname.endsWith("/start")){
         const body=request.postDataJSON();assert.match(body.requestId,/^[0-9a-f-]{36}$/);assert.equal(body.orgId,"1");starts++;
-        operation={id:body.requestId,orgId:"1",owned:true,phase:"waiting_authorization",startedAt:Date.now(),expiresAt:Date.now()+600000,authorizationUrl:"https://reclaude.ai/cli/auth?state=browser-fixture"};
+        operation={id:body.requestId,orgId:"1",owned:true,phase:"waiting_authorization",startedAt:Date.now(),expiresAt:Date.now()+600000,authorizationUrl:"https://www.recode.cat/cli/auth?state=browser-fixture&p=claude"};
       }
       if(url.pathname.endsWith("/cancel")){cancels++;operation={...operation,phase:"cancelled",authorizationUrl:undefined};}
       await route.fulfill({json:{data:{enabled:true,organizations:[{orgId:"1",label:"linucong",connected:true}],operation}}});
     });
-    await context.route("https://reclaude.ai/**",route=>route.fulfill({contentType:"text/html; charset=utf-8",body:'<!doctype html><meta charset="UTF-8"><h1>模拟设备认证</h1><button>批准</button>'}));
+    await context.route("https://www.recode.cat/**",route=>route.fulfill({contentType:"text/html; charset=utf-8",body:'<!doctype html><meta charset="UTF-8"><h1>模拟设备认证</h1><button>批准</button>'}));
     const page=await context.newPage();page.on("pageerror",error=>errors.push(error.message));
     await page.goto(origin+"/tests/reclaudeAuthorization.html");
     await page.getByRole("button",{name:"打开重新认证",exact:true}).click();
@@ -33,9 +33,9 @@ try {
     await expect(dialog.getByRole("button",{name:"退出并重新登录",exact:true})).toBeEnabled();
     const popupPromise=page.waitForEvent("popup");await dialog.getByRole("button",{name:"退出并重新登录",exact:true}).click();
     const popup=await popupPromise;
-    await popup.waitForURL("https://reclaude.ai/cli/auth?state=browser-fixture");
+    await popup.waitForURL("https://www.recode.cat/cli/auth?state=browser-fixture&p=claude");
     assert.equal(await popup.evaluate(()=>window.opener===null),true);
-    await expect(dialog.getByRole("link",{name:"打开认证页面"})).toHaveAttribute("href","https://reclaude.ai/cli/auth?state=browser-fixture");
+    await expect(dialog.getByRole("link",{name:"打开认证页面"})).toHaveAttribute("href","https://www.recode.cat/cli/auth?state=browser-fixture&p=claude");
     await expect(dialog.getByRole("button",{name:"退出并重新登录",exact:true})).toBeDisabled();assert.equal(starts,1);
     const box=await dialog.boundingBox();assert.ok(box.x>=0&&box.x+box.width<=(mobile?393:1440));
     await page.screenshot({path:`${evidence}/${mobile?"mobile":"desktop"}-authorization.png`});
