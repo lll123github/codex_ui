@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { CodexBridge } from "./codexBridge.js";
@@ -18,6 +18,7 @@ import { ReclaudeUsageMonitor } from "./reclaudeUsage.js";
 import type { ReclaudeUsageStatus } from "../shared/reclaudeUsage.js";
 import { ReclaudeLifecycle } from "./reclaudeLifecycle.js";
 import { ReclaudeAuthorization } from "./reclaudeAuthorization.js";
+import { prepareClaudeForkHistory } from "./claudeForkHistory.js";
 
 type RecordValue = Record<string, any>;
 const object = (v: unknown): RecordValue => v && typeof v === "object" && !Array.isArray(v) ? v as RecordValue : {};
@@ -26,6 +27,9 @@ const services = new WeakMap<object, ClaudeService>();
 const scripts = fileURLToPath(new URL("../scripts/", import.meta.url));
 
 export function getClaudeService(bridge: object): ClaudeService | undefined { return services.get(bridge); }
+export function effectiveRuntimeModel(bridge: object, userId: string, model: string): string {
+  return isReclaudeModel(model) ? services.get(bridge)?.bindings.effectiveModel(userId, model) ?? model : model;
+}
 export function assertRuntimeModel(bridge: object, userId: string, params: unknown, threadId?: string) {
   const p = object(params), model = p.model ?? p.defaultModel ?? p.collaborationMode?.settings?.model;
   const service = services.get(bridge);
@@ -146,6 +150,14 @@ export class ClaudeService {
       status: { type: this.active.has(row.id) ? "active" : "idle" }, turns: [], archived: row.archived };
   }
   list(userId: string, projectId: string) { return this.storage.list(userId, projectId).map(row => this.summary(row)); }
+  toolArchive(userId: string, threadId: string) {
+    const row = this.row(threadId), archive = row.toolOutputArchive;
+    if (row.userId !== userId) throw new AppError("runtime_forbidden", "无法读取其他用户的工具结果附件。");
+    if (!archive) return null;
+    const root = fs.realpathSync(this.config.storageDirectory), file = fs.realpathSync(archive.path);
+    if (!file.startsWith(root + path.sep) || fs.lstatSync(archive.path).isSymbolicLink() || !fs.statSync(file).isFile()) throw new Error("Invalid Claude tool archive");
+    return {path:file,summary:{...archive.summary,threadId}};
+  }
   private count(row: ClaudeConversation) { return (row.inheritedTurnCount ?? 0) + this.storage.turnCount(row.id); }
   private turns(row: ClaudeConversation, limit: number, before = 0): RecordValue[] {
     const ownCount = this.storage.turnCount(row.id);
@@ -174,24 +186,43 @@ export class ClaudeService {
   private rememberArchive(row: ClaudeConversation, source: string) {
     row.historyArchive = path.join(this.config.storageDirectory, "archive", row.nativeSessionId, hashClaudeHistory(source), `${row.nativeSessionId}.jsonl`);
   }
-  private async branchNative(row: ClaudeConversation, binding: ClaudeBinding, cwd: string, title: string, cutoff?: string) {
+  private async branchNative(row: ClaudeConversation, binding: ClaudeBinding, cwd: string, title: string, cutoff?: string, accountSwitch = false) {
     const source = this.source(row);
-    // Reserve before any offline mutation. One global ledger, even across users,
-    // processes and restarts. Failed/uncertain attempts retain their slot.
-    this.storage.reserve(randomUUID());
-    const staging = path.join(this.config.storageDirectory, "fork-staging", randomUUID());
+    const sourceDigest = hashClaudeHistory(source);
+    const key = accountSwitch ? createHash("sha256").update(JSON.stringify([row.id,row.userId,row.nativeSessionId,binding.orgId,binding.accountKey,cwd])).digest("hex") : randomUUID();
+    const operation = this.storage.nativeFork(key) ?? this.storage.createNativeFork({id:randomUUID(),key,sourceThreadId:row.id,userId:row.userId,
+      sourceNativeId:row.nativeSessionId,sourceDigest,targetOrgId:binding.orgId,targetAccountKey:binding.accountKey});
+    if (operation.sourceDigest !== sourceDigest) throw new AppError("claude_history_conflict", "分支期间源历史发生变化，完整记录已保留，未自动重建分支。");
+    this.storage.reserve(operation.id);
+    const staging = path.join(this.config.storageDirectory, "fork-staging", operation.id);
     fs.mkdirSync(staging, { recursive: true, mode: 0o700 });
-    // Never place the source id in the target account. An isolated staging root
-    // makes it impossible for fork to accidentally resume the source remotely.
-    stageClaudeHistory(source, staging, row.nativeSessionId, path.join(this.config.storageDirectory, "archive"));
-    const nativeId = await this.forkWorker(row.nativeSessionId, staging, title, cutoff);
+    if (!operation.stagedDigest) {
+      // A crash before the prepared record is committed cannot have launched
+      // the SDK worker. Reset only this operation's private staging copy.
+      const previous = locateClaudeHistory(row.nativeSessionId, [staging]);
+      if (previous && hashClaudeHistory(previous) !== sourceDigest) fs.unlinkSync(previous);
+      const staged = stageClaudeHistory(source, staging, row.nativeSessionId, path.join(this.config.storageDirectory, "archive"));
+      let imported = row.toolOutputArchive?.imported;
+      if (!imported && this.storage.db.prepare("SELECT 1 FROM sqlite_master WHERE name='runtime_transfers' AND type='table'").get()) {
+        const transfer = this.storage.db.prepare("SELECT body FROM runtime_transfers WHERE json_extract(body,'$.targetThreadId')=? AND json_extract(body,'$.userId')=? AND json_extract(body,'$.nativeSessionId')=? AND json_extract(body,'$.sourceRuntime')='codex' AND json_extract(body,'$.phase')='completed'").get(row.id,row.userId,row.nativeSessionId) as {body:string}|undefined;
+        if (transfer) { const at=JSON.parse(transfer.body).createdAt; if(Number.isFinite(at))imported={timestamp:new Date(at).toISOString()}; }
+      }
+      operation.toolOutputArchive = await prepareClaudeForkHistory(staged, {threadId:row.id,directory:path.join(staging,"tool-archive"),imported,previous:row.toolOutputArchive,upToMessageId:cutoff});
+      operation.stagedDigest = hashClaudeHistory(staged);
+      this.storage.saveNativeFork(operation);
+    }
+    const prepared = locateClaudeHistory(row.nativeSessionId, [staging]);
+    if (!prepared || hashClaudeHistory(prepared) !== operation.stagedDigest) throw new AppError("claude_history_conflict", "已准备的分支历史不完整，原会话未修改。");
+    const nativeId = operation.nativeSessionId ?? await this.forkWorker(row.nativeSessionId, staging, title, cutoff, path.join(staging,"sdk-result.json"));
     const forked = locateClaudeHistory(nativeId, [staging]);
     if (!forked) throw new Error("离线 fork 未产生可验证的历史文件。");
+    operation.nativeSessionId = nativeId; this.storage.saveNativeFork(operation);
     stageClaudeHistory(forked, binding.configRoot, nativeId, path.join(this.config.storageDirectory, "archive"));
     this.assertCwd(binding, cwd);
-    return nativeId;
+    return {nativeId,toolOutputArchive:operation.toolOutputArchive};
   }
   private async prepare(row: ClaudeConversation, model: string): Promise<ClaudeBinding> {
+    model = this.bindings.effectiveModel(row.userId, model);
     this.refreshUsageCache();
     this.usage.assertAvailable(this.bindings.resolve(row.userId, model));
     const binding = await this.bindings.refresh(row.userId, model);
@@ -201,7 +232,9 @@ export class ClaudeService {
     if (row.initialized) {
       if (row.accountKey !== binding.accountKey || row.orgId !== binding.orgId) {
         const previous = row.nativeSessionId;
-        next.nativeSessionId = await this.branchNative(row, binding, row.cwd, row.name);
+        const fork = await this.branchNative(row, binding, row.cwd, row.name, undefined, true);
+        next.nativeSessionId = fork.nativeId;
+        if (fork.toolOutputArchive) next.toolOutputArchive = fork.toolOutputArchive;
         next.parentSessionId = previous;
         const target = locateClaudeHistory(next.nativeSessionId, [binding.configRoot]);
         if (target) this.rememberArchive(next, target);
@@ -214,7 +247,8 @@ export class ClaudeService {
     this.storage.beginBindingMigration(before, next);
     this.recoverBindingMigrations(row.id);
     Object.assign(row, next);
-    if (before.nativeSessionId !== next.nativeSessionId) this.emit("notification", { method: "runtime/accountSwitched", params: { threadId: row.id, mode: "offline-fork", orgId: binding.orgId } });
+    if (before.nativeSessionId !== next.nativeSessionId) this.emit("notification", { method: "runtime/accountSwitched", params: { threadId: row.id, mode: "offline-fork", orgId: binding.orgId, model:row.model,
+      reasoningEffort:this.store.getThreadOwner(row.id)?.reasoningEffortOverride ?? "medium", toolOutputArchived:!!row.toolOutputArchive } });
     return binding;
   }
   async request(method: string, p: RecordValue = {}): Promise<unknown> {
@@ -229,11 +263,12 @@ export class ClaudeService {
     if (method === "thread/start") {
       const userId = String(p.userId ?? ""), project = this.store.getProject(String(p.projectId ?? ""), userId);
       if (!project || project.rootPath !== p.cwd) throw new AppError("runtime_forbidden", "Claude 项目归属无法确认。");
-      this.refreshUsageCache(); this.usage.assertAvailable(this.bindings.resolve(userId, p.model));
-      const binding = await this.bindings.refresh(userId, p.model); this.assertCwd(binding, project.rootPath);
+      const model = this.bindings.effectiveModel(userId, p.model);
+      this.refreshUsageCache(); this.usage.assertAvailable(this.bindings.resolve(userId, model));
+      const binding = await this.bindings.refresh(userId, model); this.assertCwd(binding, project.rootPath);
       this.usage.assertAvailable(binding);
       const row: ClaudeConversation = { id: randomUUID(), nativeSessionId: randomUUID(), userId, projectId: project.id, cwd: project.rootPath,
-        name: "新 Claude 会话", model: p.model, orgId: binding.orgId, accountKey: binding.accountKey, configRoot: binding.configRoot,
+        name: "新 Claude 会话", model, orgId: binding.orgId, accountKey: binding.accountKey, configRoot: binding.configRoot,
         initialized: false, archived: false, createdAt: Date.now(), updatedAt: Date.now() };
       this.storage.reserve(row.nativeSessionId);
       this.storage.save(row);
@@ -253,7 +288,7 @@ export class ClaudeService {
     if (method === "thread/fork") return this.locked(row.id, async () => {
       // Explicit fork is entirely local, including binding lookup. The next
       // user turn refreshes actual account identity before any model request.
-      const model = p.model ?? row.model, binding = this.bindings.resolve(row.userId, model);
+      const model = this.bindings.effectiveModel(row.userId, p.model ?? row.model), binding = this.bindings.resolve(row.userId, model);
       this.refreshUsageCache(); this.usage.assertAvailable(binding);
       const project = this.store.getProject(p.projectId ?? row.projectId, row.userId);
       if (!project) throw new Error("目标项目不存在。");
@@ -276,10 +311,11 @@ export class ClaudeService {
           else throw new Error("该历史轮次来自更早的原生分支；请从当前最后一轮创建完整分支。");
         }
       }
-      const nativeSessionId = await this.branchNative(row, binding, project.rootPath, `${row.name} · 分支`, cutoff);
+      const fork = await this.branchNative(row, binding, project.rootPath, `${row.name} · 分支`, cutoff), nativeSessionId = fork.nativeId;
       const child: ClaudeConversation = { ...row, id: randomUUID(), nativeSessionId, parentSessionId: row.nativeSessionId,
         parentThreadId: row.id, inheritedTurnCount, initialized: true, model, orgId: binding.orgId, accountKey: binding.accountKey,
-        configRoot: binding.configRoot, projectId: project.id, cwd: project.rootPath, name: `${row.name} · 分支`, createdAt: Date.now(), updatedAt: Date.now() };
+        configRoot: binding.configRoot, projectId: project.id, cwd: project.rootPath, name: `${row.name} · 分支`, createdAt: Date.now(), updatedAt: Date.now(),
+        ...(fork.toolOutputArchive ? {toolOutputArchive:fork.toolOutputArchive} : {}) };
       const target = locateClaudeHistory(nativeSessionId, [binding.configRoot]);
       if (target) this.rememberArchive(child, target);
       this.storage.save(child);
@@ -386,10 +422,10 @@ export class ClaudeService {
   close() { if (this.closed) return; this.closed = true; this.authorization.close(); if (this.usageTimer) clearInterval(this.usageTimer); for (const [id, runtime] of this.active) runtime.interrupt(this.row(id).userId, id); this.active.clear(); this.storage.close(); }
 }
 
-export async function offlineFork(sessionId: string, configRoot: string, title: string, cutoff?: string): Promise<string> {
+export async function offlineFork(sessionId: string, configRoot: string, title: string, cutoff?: string, resultFile?: string): Promise<string> {
   const result = await run("/usr/bin/python3", [path.join(scripts, "claude-offline-network-guard.py"), process.execPath,
-    path.join(scripts, "claude-offline-fork.mjs"), sessionId, "", title, cutoff ?? ""],
-    { env: { ...process.env, CLAUDE_CONFIG_DIR: configRoot }, timeout: 120_000, maxBuffer: 1024 * 1024 });
+    "--max-old-space-size=1536", path.join(scripts, "claude-offline-fork.mjs"), sessionId, "", title, cutoff ?? ""],
+    { env: { ...process.env, CLAUDE_CONFIG_DIR: configRoot, ...(resultFile ? {CLAUDE_FORK_RESULT_FILE:resultFile} : {}) }, timeout: 120_000, maxBuffer: 1024 * 1024 });
   const id = JSON.parse(result.stdout.trim()).sessionId;
   if (typeof id !== "string" || !/^[0-9a-f-]{36}$/i.test(id) || id === sessionId) throw new Error("Invalid offline fork identity.");
   return id;

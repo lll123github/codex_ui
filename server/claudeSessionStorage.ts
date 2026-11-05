@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { AppError } from "./appErrors.js";
 import { remainingTime } from "../shared/reclaudeUsage.js";
+import type { ClaudeToolArchive } from "./claudeForkHistory.js";
 
 const HOUR = 3_600_000;
 const LIMIT = 5;
@@ -16,8 +17,14 @@ export interface ClaudeConversation {
   historyArchive?: string;
   inheritedTurnCount?: number;
   collaborationMode?: "plan" | "default";
+  toolOutputArchive?: ClaudeToolArchive;
 }
 export interface ClaudeBindingMigration { id: string; before: ClaudeConversation; after: ClaudeConversation; }
+export interface ClaudeNativeFork {
+  id: string; key: string; sourceThreadId: string; userId: string; sourceNativeId: string;
+  sourceDigest: string; targetOrgId: string; targetAccountKey: string;
+  stagedDigest?: string; nativeSessionId?: string; toolOutputArchive?: ClaudeToolArchive;
+}
 
 /** One database for every bound user/account/organization, including forks.
  * A failed or uncertain creation keeps its slot: restarting cannot reset the
@@ -38,6 +45,7 @@ export class ClaudeSessionStorage {
       CREATE TABLE IF NOT EXISTS lineage (native_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS queue (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, created_at INTEGER NOT NULL, body TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS binding_migrations (id TEXT PRIMARY KEY, thread_id TEXT NOT NULL UNIQUE, body TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS native_forks (operation_key TEXT PRIMARY KEY, body TEXT NOT NULL);
     `);
     const columns=this.db.prepare("PRAGMA table_info(creations)").all() as Array<{name:string}>;
     if(!columns.some(column=>column.name==="runtime"))this.db.exec("ALTER TABLE creations ADD COLUMN runtime TEXT NOT NULL DEFAULT 'claude-code'");
@@ -82,6 +90,19 @@ export class ClaudeSessionStorage {
     this.db.prepare("INSERT INTO lineage VALUES (?,?,?) ON CONFLICT(native_id) DO UPDATE SET body=excluded.body").run(row.nativeSessionId, row.id, JSON.stringify(row));
   }
   save(row: ClaudeConversation) { this.transaction(() => this.write(row)); }
+  nativeFork(key: string): ClaudeNativeFork | null {
+    const row = this.db.prepare("SELECT body FROM native_forks WHERE operation_key=?").get(key) as {body:string}|undefined;
+    return row ? JSON.parse(row.body) : null;
+  }
+  createNativeFork(row: ClaudeNativeFork): ClaudeNativeFork {
+    this.db.prepare("INSERT OR IGNORE INTO native_forks VALUES(?,?)").run(row.key, JSON.stringify(row));
+    return this.nativeFork(row.key)!;
+  }
+  saveNativeFork(row: ClaudeNativeFork) {
+    const previous = this.nativeFork(row.key);
+    if (!previous || previous.id !== row.id) throw new AppError("claude_history_conflict", "分支操作记录已变化，未覆盖会话。");
+    this.db.prepare("UPDATE native_forks SET body=? WHERE operation_key=?").run(JSON.stringify(row), row.key);
+  }
   beginBindingMigration(before: ClaudeConversation, after: ClaudeConversation): ClaudeBindingMigration {
     if (["id", "userId", "projectId", "cwd"].some(key => before[key as keyof ClaudeConversation] !== after[key as keyof ClaudeConversation])) {
       throw new AppError("runtime_forbidden", "会话迁移不能更改用户、项目或网页会话归属。");

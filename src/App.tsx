@@ -10443,6 +10443,13 @@ export function App() {
         return;
       }
       const params = notification.params ?? {};
+      if (notification.method === "runtime/accountSwitched") {
+        if (typeof params.threadId === "string" && typeof params.model === "string") {
+          applyThreadModelProfile(params.threadId, params.model, isReasoningEffort(params.reasoningEffort) ? params.reasoningEffort : "medium");
+          if (params.toolOutputArchived) window.dispatchEvent(new CustomEvent("claude-history-archived", {detail:{threadId:params.threadId}}));
+        }
+        return;
+      }
       if (notification.method === "runtime/reclaudeUsage") {
         if(isRecord(params.usage)&&Array.isArray(params.usage.accounts))receiveReclaudeUsage(params.usage as unknown as ReclaudeUsageStatus);
         return;

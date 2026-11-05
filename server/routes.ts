@@ -1,5 +1,5 @@
 import { claudePendingProfiles, isReclaudeModel } from "../shared/agentRuntime.js";
-import { assertRuntimeModel, getClaudeService } from "./claudeService.js";
+import { assertRuntimeModel, effectiveRuntimeModel, getClaudeService } from "./claudeService.js";
 import { getRuntimeHistoryTransfer } from "./runtimeHistoryTransfer.js";
 import fs from "node:fs";
 import { ProviderUsageTracker } from "./providerUsage.js";
@@ -4280,6 +4280,7 @@ export function registerRoutes(app: FastifyInstance, bridge: CodexBridge, store:
         return reply.code(404).send({ error: "Thread not found." });
       }
       const input = threadModelProfileSchema.parse(request.body);
+      input.model = effectiveRuntimeModel(bridge,userId,input.model);
       assertRuntimeModel(bridge, userIdFromRequest(request, store), input);
       assertRuntimeModel(bridge, userId, input, request.params.threadId);
       if (getClaudeService(bridge)?.owns(request.params.threadId)) await bridge.request("thread/resume", { threadId: request.params.threadId, model: input.model, excludeTurns: true });
@@ -4354,11 +4355,13 @@ export function registerRoutes(app: FastifyInstance, bridge: CodexBridge, store:
       const userId=userIdFromRequest(request,store);
       if(!store.userCanAccessThread(request.params.threadId,userId,request.params.id))return reply.code(403).send({error:"Thread is not visible for this logged-in user."});
       const root=toolArchiveRoot(serverConfig.dataDir,userId);
-      const summary=await readToolArchiveSummary(root,z.string().uuid().parse(request.params.threadId));
+      const id=z.string().uuid().parse(request.params.threadId),claude=getClaudeService(bridge);
+      const nativeArchive=claude?.owns(id)?claude.toolArchive(userId,id):null;
+      const summary=nativeArchive?.summary??await readToolArchiveSummary(root,id);
       reply.header("Cache-Control","private, no-store");
       if(request.query.download==="1"){
         if(!summary)return reply.code(404).send({error:"工具结果附件不存在。"});
-        return reply.type("application/gzip").header("X-Content-Type-Options","nosniff").header("Content-Disposition",`attachment; filename="tool-results-${request.params.threadId}.jsonl.gz"`).header("Content-Length",String(summary.archiveBytes)).send(fs.createReadStream(toolArchivePath(root,request.params.threadId)));
+        return reply.type("application/gzip").header("X-Content-Type-Options","nosniff").header("Content-Disposition",`attachment; filename="tool-results-${request.params.threadId}.jsonl.gz"`).header("Content-Length",String(summary.archiveBytes)).send(fs.createReadStream(nativeArchive?.path??toolArchivePath(root,request.params.threadId)));
       }
       return {data:summary};
     }catch(error){return reply.code(errorStatus(error)).send({error:error instanceof Error?error.message:String(error)});}
@@ -4408,7 +4411,7 @@ export function registerRoutes(app: FastifyInstance, bridge: CodexBridge, store:
         if (input.prompt) throw new Error("离线 fork 不接受模型消息；请创建分支后再发送任务。");
         if (input.archiveToolOutputs) throw new Error("Claude 分支保留完整原生历史，不支持精简工具历史。");
         const source = claude.storage.get(request.params.threadId)!;
-        const model = input.model ?? source.model;
+        const model = effectiveRuntimeModel(bridge,userId,input.model ?? source.model);
         assertRuntimeModel(bridge, userId, { model });
         const result = asRecord(await bridge.request("thread/fork", { threadId: source.id, model, projectId: targetProject.id, lastTurnId: input.turnId }));
         const thread = asRecord(result.thread);
