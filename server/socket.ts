@@ -1,4 +1,4 @@
-import { assertRuntimeModel, getClaudeService } from "./claudeService.js";
+import { assertRuntimeModel, effectiveRuntimeModel, getClaudeService } from "./claudeService.js";
 import { getRuntimeHistoryTransfer } from "./runtimeHistoryTransfer.js";
 import { isReclaudeModel } from "../shared/agentRuntime.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -1376,7 +1376,7 @@ async function handleClientMessage(
         if (!question) {
           throw new Error("Prompt is required.");
         }
-        const model = pickString(message.model, project.defaultModel).trim() || project.defaultModel;
+        const model = effectiveRuntimeModel(bridge,sessionUserId,pickString(message.model, project.defaultModel).trim() || project.defaultModel);
         const reasoningEffort = pickReasoningEffort(message.reasoningEffort, project.defaultReasoningEffort);
         const requestedContextConfig = !threadContextFeatureEnabled || message.contextConfig === undefined
           ? null
@@ -1534,7 +1534,7 @@ async function handleClientMessage(
         if (boundSide) await reconcileSideChat(bridge, store, boundSide);
         const previousModel = owner?.modelOverride ?? modelDefaults.defaultModel;
         const previousEffort = owner?.reasoningEffortOverride ?? modelDefaults.defaultReasoningEffort;
-        const model = boundSide ? pickString(message.model, previousModel).trim() || previousModel : previousModel;
+        const model = effectiveRuntimeModel(bridge,sessionUserId,boundSide ? pickString(message.model, previousModel).trim() || previousModel : previousModel);
         const reasoningEffort = boundSide ? pickReasoningEffort(message.reasoningEffort, previousEffort) : previousEffort;
         const crossRuntime=!!boundSide&&!!getClaudeService(bridge)?.owns(threadId)!==isReclaudeModel(model);
         if (boundSide && !crossRuntime && !isReclaudeModel(model) && isAccountPoolBridge(bridge)) {

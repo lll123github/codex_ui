@@ -91,6 +91,8 @@ export class RuntimeHistoryTransfer {
     let row = this.get(input.operationId);
     if (row?.phase === "completed") return this.result(row);
     if (row && ["creating", "importing", "uncertain"].includes(row.phase)) throw new AppError("migration_uncertain", "此前迁移的提交结果尚未确认，已阻止重复创建或重复导入。原会话完整保留，请查看迁移记录。");
+    if (isReclaudeModel(input.targetModel)) input={...input,targetModel:this.claude.bindings.effectiveModel(input.userId,input.targetModel)};
+    if (row && isReclaudeModel(row.targetModel)) { row.targetModel=this.claude.bindings.effectiveModel(row.userId,row.targetModel);this.save(row); }
     if(isReclaudeModel(input.targetModel))this.claude.storage.assertCapacity(input.operationId);
     const sourceRuntime = this.claude.owns(input.sourceThreadId) ? "claude-code" : "codex";
     if ((sourceRuntime === "claude-code") === isReclaudeModel(input.targetModel)) throw new AppError("migration_target", "请选择另一运行引擎；同引擎请使用原生分支。");

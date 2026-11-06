@@ -17,6 +17,9 @@ export interface ClaudeIntegrationConfig {
   users?: Record<string, { workspaceRoot: string; orgIds: string[] }>;
   /** One account pool for every web user, with separate user workspaces. */
   sharedUsers?: { workspaceDirectory: string; orgIds: string[] };
+  /** Trusted shared-pool switch: existing model ids follow this organization
+   * mapping only when work is actually submitted, without rewriting history. */
+  organizationRedirects?: Record<string, string>;
   /** Optional local cache exported by a trusted ReClaude cache reader. Never
    * a Claude OAuth usage URL, shell command, or browser-provided file path. */
   usageCacheFile?: string;
@@ -81,6 +84,20 @@ export class ClaudeBindings {
     return owner;
   }
   orgIds(userId: string): string[] { return this.owner(userId)?.orgIds ?? []; }
+  effectiveModel(userId: string, model: string): string {
+    const match = model.match(/^(reclaude-[a-z][a-z0-9-]*)@([0-9]+)$/);
+    if (!match) return model;
+    const allowed = this.orgIds(userId), seen = new Set<string>();
+    let orgId = match[2];
+    while (this.config.organizationRedirects?.[orgId] !== undefined) {
+      if (seen.has(orgId) || !allowed.includes(orgId)) throw new AppError("runtime_forbidden", "组织切换映射无效，原会话未修改。");
+      seen.add(orgId);
+      const next = this.config.organizationRedirects[orgId];
+      if (!/^[0-9]+$/.test(next) || !allowed.includes(next)) throw new AppError("runtime_forbidden", "目标组织不属于共享账号池，原会话未修改。");
+      orgId = next;
+    }
+    return `${match[1]}@${orgId}`;
+  }
   invalidateModels() { this.modelCheckedAt.clear(); }
   list(userId: string): ClaudeBinding[] {
     const owner = this.owner(userId);
@@ -109,6 +126,7 @@ export class ClaudeBindings {
     return bindings;
   }
   resolve(userId: string, model: string): ClaudeBinding {
+    model = this.effectiveModel(userId, model);
     const orgId = model.match(/^reclaude-[a-z][a-z0-9-]*@([0-9]+)$/)?.[1];
     const matches = this.list(userId).filter(binding => binding.orgId === orgId);
     if (matches.length !== 1) throw new AppError("runtime_not_connected", matches.length ? "此组织有多个本地绑定，需先明确有效绑定。" : "该组织尚未授权，或实际 Claude 账号信息尚未就绪。");

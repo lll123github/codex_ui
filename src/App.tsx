@@ -3962,7 +3962,7 @@ function QuotaPopover({ quota, pool, loading, closing, userId, reclaudeStatus, c
               className={`accountPoolTab ${item === selectedProvider ? "active" : ""} ${item.status !== "ready" ? "degraded" : ""}`}
               onClick={() => setSelectedAccountId(`provider:${item.id}`)}><span>{item.name}</span><strong>{providerRemaining(item)}</strong></button>)}
           </div>
-          {selectedClaude ? <ReclaudeQuotaDetails key={selectedClaude.orgId} account={selectedClaude} cacheError={reclaudeStatus?.cacheError}/> : selectedProvider ? <ProviderQuotaDetails key={selectedProvider.id} item={selectedProvider} formatPeriod={period => rateWindowText({ usedPercent: period.usedPercent, windowDurationMins: null, resetsAt: period.resetsAt ? Date.parse(period.resetsAt) / 1000 : null }, ({ session: "5小时", weekly: "7天", monthly: "月度" } as Record<string, string>)[period.label] ?? period.label)} /> : selectedQuota ? <AccountQuotaDetails quota={selectedQuota} /> : <p>暂未读取到额度</p>}
+          {selectedClaude ? <ReclaudeQuotaDetails key={selectedClaude.orgId} account={selectedClaude} cacheError={reclaudeStatus?.cacheError} creations={reclaudeStatus?.creations}/> : selectedProvider ? <ProviderQuotaDetails key={selectedProvider.id} item={selectedProvider} formatPeriod={period => rateWindowText({ usedPercent: period.usedPercent, windowDurationMins: null, resetsAt: period.resetsAt ? Date.parse(period.resetsAt) / 1000 : null }, ({ session: "5小时", weekly: "7天", monthly: "月度" } as Record<string, string>)[period.label] ?? period.label)} /> : selectedQuota ? <AccountQuotaDetails quota={selectedQuota} /> : <p>暂未读取到额度</p>}
           {!selectedProvider && selectedAccount ? (
             <div className="accountPoolSelectedMeta">
               {accountQuotaStatus(selectedAccount) === "cached" ? <span>额度查询暂时失败 · 显示缓存，后台重试中</span> : null}
@@ -3983,7 +3983,7 @@ function QuotaPopover({ quota, pool, loading, closing, userId, reclaudeStatus, c
           ) : null}
         </>
       ) : selectedQuota ? <AccountQuotaDetails quota={selectedQuota} /> : <p>{loading ? "正在读取额度…" : "暂未读取到额度"}</p>}
-      {selectedClaude ? <button className="reclaudeAuthEntry" type="button" onClick={() => onReauthenticate(selectedClaude.orgId)}>重新认证 ReClaude</button> : null}
+      {selectedClaude || (reclaudeStatus && !claudeAccounts.length) ? <button className="reclaudeAuthEntry" type="button" onClick={() => onReauthenticate(selectedClaude?.orgId)}>重新认证 ReClaude</button> : null}
     </section>
   );
 }
@@ -10484,6 +10484,13 @@ export function App() {
         return;
       }
       const params = notification.params ?? {};
+      if (notification.method === "runtime/accountSwitched") {
+        if (typeof params.threadId === "string" && typeof params.model === "string") {
+          applyThreadModelProfile(params.threadId, params.model, isReasoningEffort(params.reasoningEffort) ? params.reasoningEffort : "medium");
+          if (params.toolOutputArchived) window.dispatchEvent(new CustomEvent("claude-history-archived", {detail:{threadId:params.threadId}}));
+        }
+        return;
+      }
       if (notification.method === "runtime/reclaudeUsage") {
         if(isRecord(params.usage)&&Array.isArray(params.usage.accounts))receiveReclaudeUsage(params.usage as unknown as ReclaudeUsageStatus);
         return;
