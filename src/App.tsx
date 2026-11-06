@@ -3957,7 +3957,7 @@ function QuotaPopover({ quota, pool, loading, closing, userId, reclaudeStatus, c
               <span className="reclaudeAccountName">{account.label}</span><strong>{reclaudeRemainingLabel(account)}</strong>
             </button>)}
           </div>
-          {selectedClaude ? <ReclaudeQuotaDetails key={selectedClaude.orgId} account={selectedClaude} cacheError={reclaudeStatus?.cacheError}/> : selectedProvider ? <ProviderQuotaDetails key={selectedProvider.id} item={selectedProvider} formatPeriod={period => rateWindowText({ usedPercent: period.usedPercent, windowDurationMins: null, resetsAt: period.resetsAt ? Date.parse(period.resetsAt) / 1000 : null }, ({ session: "5小时", weekly: "7天", monthly: "月度" } as Record<string, string>)[period.label] ?? period.label)} /> : selectedQuota ? <AccountQuotaDetails quota={selectedQuota} /> : <p>暂未读取到额度</p>}
+          {selectedClaude ? <ReclaudeQuotaDetails key={selectedClaude.orgId} account={selectedClaude} cacheError={reclaudeStatus?.cacheError} creations={reclaudeStatus?.creations}/> : selectedProvider ? <ProviderQuotaDetails key={selectedProvider.id} item={selectedProvider} formatPeriod={period => rateWindowText({ usedPercent: period.usedPercent, windowDurationMins: null, resetsAt: period.resetsAt ? Date.parse(period.resetsAt) / 1000 : null }, ({ session: "5小时", weekly: "7天", monthly: "月度" } as Record<string, string>)[period.label] ?? period.label)} /> : selectedQuota ? <AccountQuotaDetails quota={selectedQuota} /> : <p>暂未读取到额度</p>}
           {!selectedProvider && selectedAccount ? (
             <div className="accountPoolSelectedMeta">
               {accountQuotaStatus(selectedAccount) === "cached" ? <span>额度查询暂时失败 · 显示缓存，后台重试中</span> : null}
