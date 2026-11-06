@@ -31,6 +31,9 @@ try {
     localStorage.setItem("codex-v2-expanded-projects-admin",JSON.stringify([project]));
   },meta.projectId);
   const page=await context.newPage();page.on("pageerror",e=>errors.push(e.message));
+  await page.route("**/api/codex/account-pool*",route=>route.fulfill({json:{data:{strategy:"most-remaining",accounts:["100001","100002","100003","100004"].map((id,i)=>({id,label:id,health:"ready",selectedForNewThreads:i===0,assignedThreadCount:0,quota:{rateLimits:{primary:{usedPercent:20,windowDurationMins:300,resetsAt:null}}}}))}}}));
+  await page.route("**/api/codex/provider-quotas*",route=>route.fulfill({json:{data:{items:["mimo","ark"].map(id=>({id,name:id==="ark"?"Ark":"MiMo",status:"ready",periods:[{label:"weekly",usedPercent:20,resetsAt:null}],updatedAt:new Date().toISOString(),stale:false,message:null}))}}}));
+  await page.route("**/api/reclaude/usage",route=>route.fulfill({json:{data:{thresholdPercent:99,accounts:[{orgId:"1",label:"fixture",state:"available",message:"fixture",windows:[{kind:"five_hour",percent:20,resetsAt:Date.now()+3600000,observedAt:Date.now(),source:"response"}],retryAfterSeconds:null}],creations:{limit:5,used:0,remaining:5,windowSeconds:3600,retryAt:null,retryAfterSeconds:0},monitoring:"response-events"}}}));
   const post=async(name,data={})=>{
     const response=await context.request.post(origin+"/api/__test/"+name,{data});assert.ok(response.ok(),await response.text());return response.json();
   };
@@ -39,6 +42,7 @@ try {
   for(const mobile of [false,true]) {
     await page.setViewportSize(mobile?{width:393,height:852}:{width:1440,height:1000});
     const collapse=page.getByRole("button",{name:"折叠侧边栏",exact:true});if(mobile&&await collapse.isVisible())await collapse.click();
+    if (mobile) await page.locator(".conversation > .composer .composerRichInput").click();
     await page.locator(".groupedModelPicker .polishedSelectTrigger").click();
     const dialog=page.getByRole("dialog",{name:"选择模型和推理档位"});
     await dialog.getByRole("button",{name:"Claude",exact:true}).click();
@@ -52,6 +56,18 @@ try {
     await page.evaluate(() => Promise.all(document.getAnimations().filter(a => a.effect?.getTiming().iterations !== Infinity).map(a => a.finished.catch(() => {}))));
     await page.screenshot({path:`${evidence}/${mobile?"phone":"desktop"}-claude-menu.png`});
     await page.locator(".groupedModelPicker .polishedSelectTrigger").click();
+  }
+  for(const mobile of [false,true]) {
+    await page.setViewportSize(mobile?{width:393,height:852}:{width:1440,height:1000});
+    const quota=page.locator(".quotaButton");
+    if(mobile)await page.locator(".mobileHeaderTitle").click();
+    await quota.dispatchEvent("click");
+    const tabs=page.locator(".accountPoolTabs [role=tab]");await expect(tabs).toHaveCount(6);
+    assert.deepEqual(await tabs.evaluateAll(nodes=>nodes.map(node=>node.getAttribute("data-account-id"))),["100001","100002","100003","100004","reclaude:1","provider:ark"]);
+    await tabs.nth(4).click();await expect(page.getByRole("tabpanel",{name:"ReClaude 额度"})).toBeVisible();
+    assert.ok(await page.locator(".accountPoolPopover").evaluate(node=>{const r=node.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth+1;}));
+    await page.screenshot({path:`${evidence}/${mobile?"phone":"desktop"}-shared-quota.png`});
+    await quota.dispatchEvent("click");
   }
   await page.setViewportSize({width:1440,height:1000});
   await post("claude-begin");
@@ -81,6 +97,43 @@ try {
   assert.equal(state.starts.length,0,"Neither model previews nor fixtures may start a native inference turn");
   assert.deepEqual(state.approvalResponses.at(-1).result,{decision:"decline"});
   assert.deepEqual(errors,[]);
+  // Branch requests are intercepted; these clicks never create a native session.
+  const branchBodies=[];
+  await page.route("**/api/models",route=>route.fulfill({json:{data:[{id:"gpt-test",model:"gpt-6.1-sol",label:"GPT fixture",effort:"high"},{id:"gpt-max-test",model:"gpt-6.1-sol",label:"GPT fixture",effort:"max"},{id:"claude-test",model:"reclaude-sonnet@1",label:"Claude Sonnet · ReClaude",effort:"medium",availability:"ready",supportedEffortLevels:["medium","max"]},{id:"claude-max-test",model:"reclaude-sonnet@1",label:"Claude Sonnet · ReClaude",effort:"max",availability:"ready",supportedEffortLevels:["medium","max"]}]}}));
+  await page.route("**/api/projects/*/threads/*/branch",async route=>{
+    branchBodies.push(route.request().postDataJSON());
+    await route.fulfill({json:{data:{thread:{id:"main-b",name:"分支 fixture",cwd:"/fixture",configuredModel:branchBodies.at(-1).model,turns:[]},sourceThreadId:"main-a",sourceTurnId:branchBodies.at(-1).turnId,turn:null,branchMode:"cross-runtime"}}});
+  });
+  for(const mobile of [false,true]){
+    await page.setViewportSize(mobile?{width:393,height:852}:{width:1440,height:1000});
+    await page.reload({waitUntil:"domcontentloaded"});
+    const show=page.getByRole("button",{name:"展开侧边栏",exact:true});if(await show.isVisible())await show.click();
+    await page.locator('[data-thread-id="main-a"] .threadSelectButton').click();
+    const branch=page.getByRole("button",{name:"选择账号并从此回答分支",exact:true}).last();
+    await branch.click();
+    const dialog=page.getByRole("dialog",{name:"选择分支目标"});await dialog.waitFor();
+    await dialog.getByRole("button",{name:/^目标账号/}).click();
+    await page.getByRole("listbox",{name:"目标账号",exact:true}).getByRole("option",{name:mobile?"ReClaude":"100002",exact:true}).click();
+    const chosen=mobile?"reclaude-sonnet@1":"gpt-6.1-sol";
+    if(!mobile){await dialog.getByRole("button",{name:/^推理级别/}).click();await page.getByRole("listbox",{name:"推理级别",exact:true}).getByRole("option",{name:"max",exact:true}).click();}
+    else {await dialog.getByRole("button",{name:/^推理级别/}).click();await page.getByRole("listbox",{name:"推理级别",exact:true}).getByRole("option",{name:"max",exact:true}).click();assert.ok(!(await dialog.getByRole("button",{name:/^目标模型/}).innerText()).includes("ReClaude"));}
+    await dialog.evaluate(async node=>{await Promise.all(node.getAnimations({subtree:true}).filter(a=>a.effect?.getTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>{})));});
+    assert.equal(await dialog.evaluate(node=>{const r=node.getBoundingClientRect();return document.elementFromPoint(r.left+r.width/2,r.top+30)?.closest('[role="dialog"]')===node;}),true);
+    assert.equal(await dialog.locator('select').count(),0);
+    assert.equal(await dialog.evaluate(n=>getComputedStyle(n).fontSize),mobile?'15px':'14px');
+    assert.equal(await page.locator('.branchTargetScrim').evaluate(n=>getComputedStyle(n).backdropFilter),'blur(5px)');
+    for(const theme of ['light','dark']){
+      await page.evaluate(t=>document.documentElement.dataset.theme=t,theme);
+      await page.screenshot({path:`${evidence}/${mobile?"phone":"desktop"}-branch-${theme}.png`});
+    }
+    await page.screenshot({path:`${evidence}/${mobile?"phone":"desktop"}-branch-target.png`});
+    await dialog.getByRole("button",{name:"创建并打开",exact:true}).click();
+    await expect(dialog).toHaveCount(0);
+    assert.equal(branchBodies.at(-1).model,chosen);assert.equal(branchBodies.at(-1).reasoningEffort,"max");
+    if(mobile){assert.equal(branchBodies.at(-1).targetAccountId,undefined);assert.match(branchBodies.at(-1).operationId,/^[a-f0-9-]{36}$/);}
+    else {assert.equal(branchBodies.at(-1).targetAccountId,"100002");assert.equal(branchBodies.at(-1).reasoningEffort,"max");}
+  }
+  assert.equal(branchBodies.length,2);assert.deepEqual(errors,[]);
   const results={desktopAndPhoneMenus:true,unconnectedModelsDisabled:true,noFakeReasoningTiers:true,streamedTextVisible:true,fullSnapshotDeduplicated:true,nativeApprovalVisible:true,declineDelivered:true,reloadPreservesTimeline:true,nativeInferenceTurns:0,errors};
   await fs.writeFile(`${evidence}/results.json`,JSON.stringify(results,null,2)+"\n");console.log(JSON.stringify(results,null,2));
 } finally {

@@ -14,6 +14,7 @@ import { registerRoutes } from "./routes.js";
 import { locateClaudeHistory } from "./claudeSessionStorage.js";
 import { gzipSync } from "node:zlib";
 import * as authentication from "./auth.js";
+import * as claudeStorage from "./claudeSessionStorage.js";
 
 const cleanup: Array<() => void> = [];
 afterEach(() => { cleanup.splice(0).reverse().forEach(fn => fn()); vi.restoreAllMocks(); });
@@ -98,6 +99,46 @@ describe("Claude conversation switching",()=>{
     const target=f.service.bindings.resolve("admin","reclaude-sonnet@2");f.service.usage.observeResponse(target.accountKey,{rateLimitType:"seven_day",utilization:.99,resetsAt:Math.floor(Date.now()/1000)+3600});
     await expect(f.turn(id)).rejects.toMatchObject({code:"claude_weekly_limit"});expect(f.service.storage.get(id)).toEqual(before);expect(f.service.storage.quota().used).toBe(1);expect(f.calls).toHaveLength(1);
   });
+  it("passes client-advertised effort to the native SDK and persists the selected tier",async()=>{
+    const f=fixture(),binding=f.service.bindings.resolve("admin","reclaude-sonnet@1");
+    const dir=path.join(f.config.storageDirectory,"model-catalog");fs.mkdirSync(dir,{recursive:true});
+    fs.writeFileSync(path.join(dir,`${binding.accountKey}.json`),JSON.stringify([{value:"sonnet",resolvedModel:"claude-sonnet-5-5",displayName:"Sonnet 5.5",supportsEffort:true,supportedEffortLevels:["medium","high","max"]}]));
+    const id=await f.start();
+    const result=await f.service.request("turn/start",{threadId:id,model:"reclaude-sonnet@1",effort:"max",input:[{type:"text",text:"test"}]}) as any;
+    await vi.waitFor(()=>expect(f.service.storage.turn(result.turn.id)?.status).toBe("completed"));
+    expect(f.calls.at(-1).options.effort).toBe("max");
+    expect(f.service.summary(f.service.storage.get(id)!).configuredReasoningEffort).toBe("max");
+    const count=f.calls.length;
+    await expect(f.service.request("turn/start",{threadId:id,effort:"xhigh",input:[{type:"text",text:"test"}]})).rejects.toThrow(/不支持/);
+    expect(f.calls).toHaveLength(count);
+  });
+  it("does not hash and archive the entire native history on ordinary follow-ups", async () => {
+    const f = fixture(), id = await f.start();
+    const stage = vi.spyOn(claudeStorage, "stageClaudeHistory");
+    await f.turn(id); await f.turn(id);
+    expect(stage).not.toHaveBeenCalled();
+    expect(f.service.history(id).thread.turns).toHaveLength(2);
+    expect(f.service.storage.get(id)?.historyArchive).toBeUndefined();
+    expect(locateClaudeHistory(f.service.storage.get(id)!.nativeSessionId, [f.rootA])).toBeTruthy();
+  });
+  it("keeps inherited history contiguous when a page reaches its byte budget", async () => {
+    const f = fixture(), parent = await f.start(), child = await f.start();
+    const text = "x".repeat(2 * 1024 ** 2);
+    for (let i = 0; i < 2; i++) f.service.storage.saveTurn(parent, {id:`parent-${i}`, text});
+    for (let i = 0; i < 4; i++) f.service.storage.saveTurn(child, {id:`child-${i}`, text});
+    const row = f.service.storage.get(child)!;
+    f.service.storage.save({...row, parentThreadId:parent, inheritedTurnCount:2});
+    const first = f.service.history(child);
+    expect(first.thread.turns.map(turn=>turn.id)).toEqual(["child-1", "child-2", "child-3"]);
+    const second = f.service.history(child, first.history.nextBefore);
+    expect(second.thread.turns.map(turn=>turn.id)).toEqual(["parent-0", "parent-1", "child-0"]);
+    expect(second.history.hasOlder).toBe(false);
+    const page = await f.service.request("thread/turns/list", {threadId:child}) as any;
+    expect(page.data.map((turn:any)=>turn.id)).toEqual(["child-3", "child-2", "child-1"]);
+    const older = await f.service.request("thread/turns/list", {threadId:child, cursor:page.nextCursor}) as any;
+    expect(older.data.map((turn:any)=>turn.id)).toEqual(["child-0", "parent-1", "parent-0"]);
+    expect(older.nextCursor).toBeNull();
+  });
   it("rediscovers history returned to ~/.claude and lazily resumes the same real account in its new device directory",async()=>{
     const f=fixture(),id=await f.start();await f.turn(id);
     const before=f.service.storage.get(id)!,owner=f.store.getThreadOwner(id);
@@ -179,6 +220,41 @@ describe("Claude conversation switching",()=>{
     expect(f.service.bindings.refresh).not.toHaveBeenCalled();
     expect(f.calls).toHaveLength(0);
     expect(f.service.storage.quota().used).toBe(0);
+  });
+  it("finds a branch cutoff beyond a byte-limited history page without skipping turns", async () => {
+    const f = fixture(), id = await f.start(), turnId = await f.turn(id);
+    const original = f.service.storage.turn(turnId)!;
+    const text = "x".repeat(2 * 1024 ** 2);
+    for (let i = 0; i < 6; i++) f.service.storage.saveTurn(id, {...original, id:`extra-${i}`, text});
+    const result = await f.service.request("thread/fork", {threadId:id, lastTurnId:turnId}) as any;
+    expect(f.service.storage.get(result.thread.id)?.inheritedTurnCount).toBe(1);
+    expect(f.service.history(result.thread.id).thread.turns[0].id).toBe(turnId);
+  });
+  it("ignores late callbacks and rejections after shutdown without invoking a queued model call", async () => {
+    const f = fixture(), first = await f.start();
+    await f.service.request("turn/start", {threadId:first, input:[{type:"text", text:"queued"}]});
+    f.service.close(); f.service.close();
+    await new Promise(resolve=>setImmediate(resolve));
+    expect(f.calls).toHaveLength(0);
+  });
+  it("does not write a closed database when an in-flight runtime rejects or emits late events", async () => {
+    const f = fixture(), id = await f.start();
+    let reject!: (error:Error)=>void;
+    const pending = new Promise<void>((_, fail)=>{reject=fail;});
+    const run = vi.spyOn(ClaudeRuntime.prototype, "runTurn").mockImplementation(()=>pending);
+    await f.service.request("turn/start", {threadId:id, input:[{type:"text", text:"pending"}]});
+    await vi.waitFor(()=>expect(run).toHaveBeenCalledOnce());
+    const runtime = run.mock.contexts[0] as ClaudeRuntime;
+    f.service.close();
+    expect(()=>{
+      runtime.emit("nativeSession", {sessionId:"late"});
+      runtime.emit("rateLimit", {});
+      runtime.emit("serverRequest", {id:"late"});
+      runtime.emit("notification", {method:"turn/completed", params:{}});
+    }).not.toThrow();
+    reject(new Error("late fixture failure"));
+    await new Promise(resolve=>setImmediate(resolve));
+    expect(f.events.some(event=>event.method==="turn/completed")).toBe(false);
   });
   it.each([
     {code:"claude_weekly_limit",kind:"seven_day",percent:.99},
@@ -271,6 +347,8 @@ describe("Claude conversation switching",()=>{
     f.store.recordQuestionAnswer(id,"q1","admin",{answers:{one:{answers:["B"]}}});
     const app=Fastify();registerRoutes(app,bridge,f.store,{backgroundIndexing:false});
     try {
+      // CLI catalogue discovery must not block this menu or other providers.
+      vi.spyOn(service.bindings,"refreshModels").mockImplementation(()=>new Promise<void>(()=>{}));
       const models=await app.inject({method:"GET",url:"/api/models"});expect(models.json().data.some((p:any)=>p.model==="reclaude-sonnet@1"&&p.availability==="ready")).toBe(true);
       const response=await app.inject({method:"GET",url:`/api/threads/${id}?projectId=${f.project.id}`});expect(response.statusCode).toBe(200);expect(response.json().thread.turns[0].items[0].text).toBe("已持久化");
       expect(response.json().thread).toMatchObject({configuredModel:"reclaude-sonnet@1",configuredReasoningEffort:"medium"});

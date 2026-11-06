@@ -10,6 +10,8 @@ import "./mobileReading.css";
 import "./imageViewerMotion.css";
 import "./readingScale.css";
 import "./toolTypography.css";
+import "./globalDialogs.css";
+import "./dialogControlScale.css";
 observePhoneViewport();
 
 // Installation is independent of opting into notifications. The existing

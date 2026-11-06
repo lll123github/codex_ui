@@ -109,10 +109,15 @@ import { coalesceToolOutputs, collapseCodeModeWrappers, latestUserTimelineIndex,
 import { ToolReveal } from "./ToolReveal";
 import { RollingToolCount, ToolArrivalList } from "./ToolActivityMotion";
 import { useProviderQuotas, providerRemaining, ProviderQuotaDetails, ProviderFailureSummary } from "./providerQuota";
+import { visibleProviderQuotas } from "./quotaTabs";
+import {BranchTargetDialog,type BranchTarget} from "./BranchTargetDialog";
+import {profilesByDescendingEffort} from "./effortOrder";
 import { isToolSummaryClick, recordToolDisclosurePointerDown } from "./toolDisclosure";
 import { ToolArrivalRegistry } from "./toolArrivalRegistry";
 import { skillReadSummary } from "./skillReadSummary";
 import { toolPresentation } from "./toolPresentation";
+import { activityBundleSummary } from "./activityBundle";
+import { restoreSubmittedText } from "./composerSendDraft";
 import { localizedSkill, skillSection } from "./skillLocalization";
 import { GoalProgress } from "./GoalProgress";
 import { useThreadGoal } from "./threadGoal";
@@ -567,7 +572,7 @@ function modelPickerGroup(model: string): ModelPickerSection {
 }
 
 function modelPickerLabel(profile: ModelProfile): string {
-  return runtimeModelLabel(profile);
+  return runtimeModelLabel(profile)+(isReclaudeModel(profile.model)&&profile.supportedEffortLevels?.length?` ${profile.effort}`:"");
 }
 
 function MobileModelPage({ active, children }: { active: boolean; children: ReactNode }) {
@@ -652,7 +657,7 @@ export function ModelGroupedSelect({
   };
   const branchTitle = lastBranch === "gpt" ? "GPT" : lastBranch === "claude" ? "Claude" : "国产模型";
   const claudeNotice = lastBranch === "claude" && !profiles.some(profile => isReclaudeModel(profile.model) && modelIsAvailable(profile)) ? <p className="groupedModelConnectionNote" role="status">{profiles.find(profile=>isReclaudeModel(profile.model)&&profile.availability==="disabled")?.unavailableReason??"尚未连接 ReClaude。以下为模型系列预览，可用型号将在账号连接后验证。"}</p> : null;
-  const profileOptions = (group: ModelPickerSection) => visibleProfiles.filter((profile) => modelPickerGroup(profile.model) === group).map((profile) => (
+  const profileOptions = (group: ModelPickerSection) => (group==="claude"?profilesByDescendingEffort(visibleProfiles.filter(profile=>modelPickerGroup(profile.model)===group)):visibleProfiles.filter(profile=>modelPickerGroup(profile.model)===group)).map((profile) => (
     <button className={`polishedSelectOption groupedModelProfile${profile.id === value ? " selected" : ""}`}
       type="button" role="option" aria-selected={profile.id === value} key={profile.id}
       disabled={!modelIsAvailable(profile)} title={profile.unavailableReason}
@@ -3912,13 +3917,13 @@ function accountRemainingLabel(account: CodexAccountPoolAccount): string {
 }
 
 function QuotaPopover({ quota, pool, loading, closing, userId, reclaudeStatus, currentClaudeOrgId, onReauthenticate }: { quota: CodexQuota | null; pool: CodexAccountPool | null; loading: boolean; closing: boolean; userId: string; reclaudeStatus: ReclaudeUsageStatus | null; currentClaudeOrgId?: string; onReauthenticate:(orgId?:string)=>void }) {
-  const providerQuotas = useProviderQuotas(userId);
+  const providerQuotas = visibleProviderQuotas(useProviderQuotas(userId));
   const quotaAccounts = pool?.accounts.filter((entry) => entry.kind !== "api-provider") ?? [];
   const claudeAccounts = reclaudeStatus?.accounts ?? [];
   const accountCount = quotaAccounts.length + providerQuotas.length + claudeAccounts.length;
   const defaultAccount = quotaAccounts.find((entry) => entry.selectedForNewThreads) ?? quotaAccounts[0] ?? null;
   const [selectedAccountId, setSelectedAccountId] = useState<string | null>(null);
-  const ids = [...quotaAccounts.map(account => account.id), ...providerQuotas.map(account => `provider:${account.id}`), ...claudeAccounts.map(account => `reclaude:${account.orgId}`)];
+  const ids = [...quotaAccounts.map(account => account.id), ...claudeAccounts.map(account => `reclaude:${account.orgId}`), ...providerQuotas.map(account => `provider:${account.id}`)];
   const defaultId = claudeAccounts.some(account => account.orgId === currentClaudeOrgId) ? `reclaude:${currentClaudeOrgId}` : defaultAccount?.id ?? ids[0];
   const activeId = selectedAccountId && ids.includes(selectedAccountId) ? selectedAccountId : defaultId;
   const selectedProvider = providerQuotas.find(item => `provider:${item.id}` === activeId);
@@ -3946,16 +3951,16 @@ function QuotaPopover({ quota, pool, loading, closing, userId, reclaudeStatus, c
                 <strong>{accountRemainingLabel(account)}</strong>
               </button>
             ))}
+            {claudeAccounts.map(account => <button type="button" role="tab" key={`reclaude:${account.orgId}`} data-account-id={`reclaude:${account.orgId}`}
+              aria-selected={account === selectedClaude} title={`ReClaude · ${account.message}`}
+              className={`accountPoolTab ${account === selectedClaude ? "active" : ""} ${account.orgId === currentClaudeOrgId ? "current" : ""} ${account.state === "disabled" ? "lowQuota" : ""}`}
+              onClick={() => setSelectedAccountId(`reclaude:${account.orgId}`)}>
+              <span className="reclaudeAccountName">ReClaude</span><strong>{reclaudeRemainingLabel(account)}</strong>
+            </button>)}
             {providerQuotas.map(item => <button type="button" role="tab" key={`provider:${item.id}`} data-account-id={`provider:${item.id}`}
               aria-selected={item === selectedProvider} title={`${item.name} · ${item.stale ? "缓存用量" : "套餐用量"}`}
               className={`accountPoolTab ${item === selectedProvider ? "active" : ""} ${item.status !== "ready" ? "degraded" : ""}`}
               onClick={() => setSelectedAccountId(`provider:${item.id}`)}><span>{item.name}</span><strong>{providerRemaining(item)}</strong></button>)}
-            {claudeAccounts.map(account => <button type="button" role="tab" key={`reclaude:${account.orgId}`} data-account-id={`reclaude:${account.orgId}`}
-              aria-selected={account === selectedClaude} title={`${account.label} · ${account.message}`}
-              className={`accountPoolTab ${account === selectedClaude ? "active" : ""} ${account.orgId === currentClaudeOrgId ? "current" : ""} ${account.state === "disabled" ? "lowQuota" : ""}`}
-              onClick={() => setSelectedAccountId(`reclaude:${account.orgId}`)}>
-              <span className="reclaudeAccountName">{account.label}</span><strong>{reclaudeRemainingLabel(account)}</strong>
-            </button>)}
           </div>
           {selectedClaude ? <ReclaudeQuotaDetails key={selectedClaude.orgId} account={selectedClaude} cacheError={reclaudeStatus?.cacheError} creations={reclaudeStatus?.creations}/> : selectedProvider ? <ProviderQuotaDetails key={selectedProvider.id} item={selectedProvider} formatPeriod={period => rateWindowText({ usedPercent: period.usedPercent, windowDurationMins: null, resetsAt: period.resetsAt ? Date.parse(period.resetsAt) / 1000 : null }, ({ session: "5小时", weekly: "7天", monthly: "月度" } as Record<string, string>)[period.label] ?? period.label)} /> : selectedQuota ? <AccountQuotaDetails quota={selectedQuota} /> : <p>暂未读取到额度</p>}
           {!selectedProvider && selectedAccount ? (
@@ -3978,7 +3983,7 @@ function QuotaPopover({ quota, pool, loading, closing, userId, reclaudeStatus, c
           ) : null}
         </>
       ) : selectedQuota ? <AccountQuotaDetails quota={selectedQuota} /> : <p>{loading ? "正在读取额度…" : "暂未读取到额度"}</p>}
-      {reclaudeStatus ? <button className="reclaudeAuthEntry" type="button" onClick={() => onReauthenticate(selectedClaude?.orgId)}>重新认证 ReClaude</button> : null}
+      {selectedClaude || (reclaudeStatus && !claudeAccounts.length) ? <button className="reclaudeAuthEntry" type="button" onClick={() => onReauthenticate(selectedClaude?.orgId)}>重新认证 ReClaude</button> : null}
     </section>
   );
 }
@@ -4541,6 +4546,7 @@ export function App() {
   const threadPrefetchesRef = useRef(new Set<string>());
   const promptRequestContextsRef = useRef(new Map<string, PromptRequestContext>());
   const pendingQueuedPromptsRef = useRef(new Map<string, { threadId: string; text: string; uploads: ComposerUpload[] }>());
+  const failedComposerDraftsRef = useRef(new Map<string, Array<{text:string;uploads:ComposerUpload[];skills:string[];reference:ComposerDocumentReference|null}>>());
   const pendingQueueSteersRef = useRef(new Map<string, { threadId: string; entry: QueuedSubmission }>());
   const interruptRequestContextsRef = useRef(new Map<string, TurnInterruptContext>());
   const threadRenameRequestContextsRef = useRef(new Map<string, ThreadRenameRequestContext>());
@@ -4836,7 +4842,8 @@ export function App() {
   const [renamingThreadId, setRenamingThreadId] = useState<string | null>(null);
   const [branchingThread, setBranchingThread] = useState(false);
   const [branchingTurnKey, setBranchingTurnKey] = useState<string | null>(null);
-  const [archiveBranchRetry,setArchiveBranchRetry]=useState<{threadId:string;turnId:string}|null>(null);
+  const [archiveBranchRetry,setArchiveBranchRetry]=useState<{threadId:string;turnId:string;target?:BranchTarget}|null>(null);
+  const [branchTarget,setBranchTarget]=useState<{threadId:string;projectId:string;turnId:string}|null>(null);
   const branchingThreadRef = useRef(false);
   const [editingLastPrompt, setEditingLastPrompt] = useState(false);
   const editingCommitRef = useRef(false);
@@ -5120,14 +5127,22 @@ export function App() {
   const exhaustedAccountNoticePresence = useExitPresence(exhaustedAccountNoticeOpen, 440);
   const openingThreadPresence = useExitPresence(Boolean(openingThreadId), 240);
   const queuedSubmissionPresence = useExitPresence(Boolean(selectedThread && queuedSubmissions.length), 260);
-  const leaderboardPresence = useExitPresence(leaderboardOpen);
-  const trackedQuotaPresence = useExitPresence(trackedQuotaOpen);
-  const skillsPickerPresence = useExitPresence(skillsPickerOpen);
-  const temporaryClosePresence = useExitPresence(temporaryCloseConfirm);
-  const settingsPresence = useExitPresence(settingsOpen);
-  const notificationSettingsPresence = useExitPresence(notificationSettingsOpen);
-  const globalSearchPresence = useExitPresence(globalSearchOpen);
-  const directoryBrowserPresence = useExitPresence(directoryBrowserOpen);
+  const leaderboardPresence = useExitPresence(leaderboardOpen,220);
+  const trackedQuotaPresence = useExitPresence(trackedQuotaOpen,220);
+  const skillsPickerPresence = useExitPresence(skillsPickerOpen,220);
+  const temporaryClosePresence = useExitPresence(temporaryCloseConfirm,220);
+  const settingsPresence = useExitPresence(settingsOpen,220);
+  const notificationSettingsPresence = useExitPresence(notificationSettingsOpen,220);
+  const threadRenamePresence=useExitPresence(Boolean(renamingThread),220);
+  const projectRenamePresence=useExitPresence(Boolean(renamingProject),220);
+  const lastRenamingThread=useRef(renamingThread),lastRenamingProject=useRef(renamingProject);
+  if(renamingThread)lastRenamingThread.current=renamingThread;
+  if(renamingProject)lastRenamingProject.current=renamingProject;
+  const displayedRenamingThread=renamingThread??lastRenamingThread.current;
+  const displayedRenamingProject=renamingProject??lastRenamingProject.current;
+  useEffect(()=>{if(!threadRenamePresence.present)lastRenamingThread.current=null;if(!projectRenamePresence.present)lastRenamingProject.current=null;},[threadRenamePresence.present,projectRenamePresence.present]);
+  const globalSearchPresence = useExitPresence(globalSearchOpen,220);
+  const directoryBrowserPresence = useExitPresence(directoryBrowserOpen,220);
 
   const selectedProject = useMemo(
     () => projects.find((project) => project.id === selectedProjectId) ?? null,
@@ -6077,10 +6092,14 @@ export function App() {
     setRenamingThread(thread);
   }
 
-  async function createBranchFromTurn(turn: Pick<Turn,"id">,archiveToolOutputs=false) {
+  function chooseBranchTarget(turn:Pick<Turn,"id">){
+    if(selectedThread&&selectedProject)setBranchTarget({threadId:selectedThread.id,projectId:selectedProject.id,turnId:turn.id});
+  }
+
+  async function createBranchFromTurn(turn: Pick<Turn,"id">,archiveToolOutputs=false,target:BranchTarget={}) {
     const project = selectedProject;
     const sourceThread = selectedThread;
-    if (!sourceThread?.id || !project?.id || branchingThreadRef.current) return;
+    if (!sourceThread?.id || !project?.id || branchingThreadRef.current) return false;
     branchingThreadRef.current = true;
     setBranchingThread(true);
     setBranchingTurnKey(`${sourceThread.id}:${turn.id}`);
@@ -6088,13 +6107,13 @@ export function App() {
     setArchiveBranchRetry(null);
     const sourceViewToken = threadViewTokenRef.current;
     try {
-      const response = await branchThread(project.id, sourceThread.id, { turnId: turn.id, ...(archiveToolOutputs?{archiveToolOutputs:true}:{}) });
+      const response = await branchThread(project.id, sourceThread.id, { turnId: turn.id, ...target, ...(archiveToolOutputs?{archiveToolOutputs:true}:{}) });
       const rawThread = response.data.thread;
       const normalizedThread = sanitizeThreadForRender({
         ...rawThread,
         pinned: false,
-        configuredModel: rawThread.configuredModel ?? sourceThread.configuredModel ?? project.defaultModel,
-        configuredReasoningEffort: rawThread.configuredReasoningEffort ?? sourceThread.configuredReasoningEffort ?? project.defaultReasoningEffort,
+        configuredModel: target.model ?? rawThread.configuredModel ?? sourceThread.configuredModel ?? project.defaultModel,
+        configuredReasoningEffort: target.reasoningEffort ?? rawThread.configuredReasoningEffort ?? sourceThread.configuredReasoningEffort ?? project.defaultReasoningEffort,
         turns: rawThread.turns ?? []
       });
       threadProjectIdsRef.current.set(normalizedThread.id, project.id);
@@ -6106,7 +6125,7 @@ export function App() {
       });
       if (threadViewTokenRef.current !== sourceViewToken || selectedThreadRef.current?.id !== sourceThread.id) {
         void refreshThreads(project.id);
-        return;
+        return true;
       }
       const branchViewToken = ++threadViewTokenRef.current;
       newThreadDraftModeRef.current = false;
@@ -6118,9 +6137,11 @@ export function App() {
       void openThread(normalizedThread.id, project.id, branchViewToken, { skipCache: true, requireFresh: true });
       void refreshThreads(project.id);
       window.requestAnimationFrame(() => document.querySelector<HTMLElement>(".composerRichInput")?.focus());
+      return true;
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
-      if(!archiveToolOutputs&&caught instanceof Error&&caught.message.includes("可用内存不足"))setArchiveBranchRetry({threadId:sourceThread.id,turnId:turn.id});
+      if(!archiveToolOutputs&&caught instanceof Error&&caught.message.includes("可用内存不足"))setArchiveBranchRetry({threadId:sourceThread.id,turnId:turn.id,target});
+      return false;
     } finally {
       branchingThreadRef.current = false;
       setBranchingThread(false);
@@ -9146,6 +9167,22 @@ export function App() {
     }
   }
 
+  function restoreComposerSubmission(draft: {text:string;uploads:ComposerUpload[];skills:string[];reference:ComposerDocumentReference|null}) {
+    setPrompt(current => restoreSubmittedText(current, draft.text));
+    setUploadedFiles(current => [...draft.uploads.filter(file=>!current.some(existing=>existing.path===file.path)), ...current]);
+    setSelectedSkillNames(current => [...new Set([...draft.skills,...current])]);
+    setDocumentReference(current => current ?? draft.reference);
+  }
+
+  useEffect(() => {
+    const key = JSON.stringify([selectedUserId, selectedProject?.id, selectedThread?.id ?? null]);
+    const drafts = failedComposerDraftsRef.current.get(key);
+    if (!drafts) return;
+    failedComposerDraftsRef.current.delete(key);
+    // Older failures precede newer typing; restore in submission order.
+    for (const draft of [...drafts].reverse()) restoreComposerSubmission(draft);
+  }, [selectedUserId, selectedProject?.id, selectedThread?.id]);
+
   async function sendPrompt(mode: "queue" | "steer" = "queue", questionAnswer?: string, predictedPrompt?: string): Promise<boolean> {
     if (!modelIsAvailable(selectedModelProfile)) {
       setError(selectedModelProfile.unavailableReason ?? CLAUDE_NOT_CONNECTED);
@@ -9230,13 +9267,31 @@ export function App() {
     }
     const promptUploads = isQuestionAnswer ? [] : [...uploadedFiles];
     const skillNames = isQuestionAnswer ? [] : selectedSkills.map((skill) => skill.name);
+    const draftScope = JSON.stringify([selectedUserId, selectedProject.id, selectedThread?.id ?? null]);
+    const draftView = threadViewTokenRef.current;
+    const draft = {text:promptText, uploads:promptUploads, skills:skillNames, reference:documentReference};
+    let handedOff = false;
+    const handoff = () => {
+      if (isQuestionAnswer) return;
+      handedOff = true;
+      setPrompt(current => current.trim() === promptText ? "" : current);
+      setUploadedFiles(current => current.filter(file=>!promptUploads.includes(file)));
+      setSelectedSkillNames(current => current.filter(name=>!skillNames.includes(name)));
+      setDocumentReference(current => current === draft.reference ? null : current);
+    };
+    const finishHandoff = (accepted: boolean) => {
+      if (accepted || !handedOff) return;
+      handedOff = false;
+      if (threadViewTokenRef.current === draftView) restoreComposerSubmission(draft);
+      else failedComposerDraftsRef.current.set(draftScope, [...(failedComposerDraftsRef.current.get(draftScope) ?? []), draft]);
+    };
     const reference = !isQuestionAnswer && documentReference?.projectId === selectedProject.id ? (() => { const { projectId: _projectId, ...selection } = documentReference; return selection; })() : undefined;
     const sentPromptText = promptWithUploadedFiles(promptText, promptUploads);
     const visibleText = [skillNames.map((name) => `$${name}`).join(" "), visiblePromptText(promptText, promptUploads)].filter(Boolean).join("\n");
     if (selectedThread && selectedActiveTurnId && mode === "queue") {
       const requestId = `queue-add-${requestToken()}`;
       try {
-        const accepted = isQuestionAnswer ? waitForQuestionAnswerAck(requestId) : null;
+        const accepted = waitForQuestionAnswerAck(requestId, "尚未确认排队消息已被接收，草稿和附件仍保留，请核对后重试。");
         codexSocket.send({
           type: "turn.queue.add",
           serviceTier: resolveServiceTier(codexFastModeEnabled),
@@ -9251,14 +9306,12 @@ export function App() {
         });
         pendingQueuedPromptsRef.current.set(requestId, { threadId: selectedThread.id, text: promptText, uploads: promptUploads });
         setQueuedSubmissions((current) => [...current, { id: `pending:${requestId}`, input: [{ type: "text", text: sentPromptText }, ...skillNames.map((skill) => ({ type: "skill", name: skill }))], clientUserMessageId: requestId }]);
-        if (!isQuestionAnswer) {
-          setPrompt("");
-          setUploadedFiles([]);
-          setSelectedSkillNames([]);
-          setDocumentReference(null);
-        }
-        return accepted ? await accepted : true;
+        handoff();
+        const ok = await accepted;
+        finishHandoff(ok);
+        return ok;
       } catch (caught) {
+        finishHandoff(false);
         finishQuestionAnswerAck(requestId, false);
         setError(caught instanceof Error ? caught.message : String(caught));
         return false;
@@ -9328,7 +9381,7 @@ export function App() {
           ...(threadContextFeatureEnabled && newThreadContextPin.trim() ? { contextPin: newThreadContextPin.trim() } : {})
         };
     try {
-      const accepted = isQuestionAnswer || isEditedPrompt ? waitForQuestionAnswerAck(requestId, isEditedPrompt ? "尚未确认修改后的提问已被接收，草稿和附件仍保留，请核对会话后重试。" : undefined) : null;
+      const accepted = waitForQuestionAnswerAck(requestId, isQuestionAnswer ? undefined : "尚未确认提问已被接收，草稿和附件仍保留，请核对会话后重试。", isQuestionAnswer ? 30_000 : 90_000);
       codexSocket.send(payload);
       if (payload.type !== "turn.steer") {
         setTopAnchoredPrompt({ requestId, threadId: selectedThread?.id ?? null, turnId: null, viewToken: requestViewToken });
@@ -9356,25 +9409,15 @@ export function App() {
         }
       ]);
       releasePendingPromptBottomHold(requestId, keepAtBottomUntil);
-      if (isEditedPrompt && accepted) {
-        setEditingLastPrompt(true);
-        try { if (!await accepted) return false; }
-        finally { setEditingLastPrompt(false); }
-        if (selectedThreadRef.current?.id !== selectedThread?.id) return true;
-        setPrompt(current => current.trim() === promptText ? "" : current);
-        setUploadedFiles(current => current.filter(file => !promptUploads.includes(file)));
-        setSelectedSkillNames(current => current.filter(name => !skillNames.includes(name)));
-        setDocumentReference(null);
-        return true;
-      }
+      handoff();
       if (!isQuestionAnswer) {
-        setPrompt("");
-        setUploadedFiles([]);
-        setSelectedSkillNames([]);
-        setDocumentReference(null);
+        if (isEditedPrompt) setEditingLastPrompt(true);
+        try { const ok = await accepted; finishHandoff(ok); return ok; }
+        finally { if (isEditedPrompt) setEditingLastPrompt(false); }
       }
-      return accepted ? await accepted : true;
+      return await accepted;
     } catch (caught) {
+      finishHandoff(false);
       finishQuestionAnswerAck(requestId, false);
       promptRequestContextsRef.current.delete(requestId);
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -9417,13 +9460,13 @@ export function App() {
     return questionHasAnswer(turns.flatMap(turn => turn.items ?? []), itemId);
   }
 
-  function waitForQuestionAnswerAck(requestId: string, timeoutMessage = "尚未确认答案已被接收，请刷新会话后重试。"): Promise<boolean> {
+  function waitForQuestionAnswerAck(requestId: string, timeoutMessage = "尚未确认答案已被接收，请刷新会话后重试。", timeoutMs = 30_000): Promise<boolean> {
     return new Promise(resolve => {
       const timer = window.setTimeout(() => {
         questionAnswerAcksRef.current.delete(requestId);
         setError(timeoutMessage);
         resolve(false);
-      }, 30_000);
+      }, timeoutMs);
       questionAnswerAcksRef.current.set(requestId, { resolve, timer });
     });
   }
@@ -10128,8 +10171,6 @@ export function App() {
           pendingQueuedPromptsRef.current.delete(message.requestId);
           if (!message.ok && pending) {
             setQueuedSubmissions((current) => current.filter((entry) => entry.id !== `pending:${message.requestId}`));
-            setPrompt((current) => current || pending.text);
-            setUploadedFiles((current) => current.length ? current : pending.uploads);
             setError(`排队发送失败：${message.error ?? "Codex 未接受排队请求。"}`);
           } else if (message.ok && requestThreadId) {
             requestQueuedSubmissions(requestThreadId);
@@ -10940,20 +10981,8 @@ export function App() {
   };
 
   const summarizeToolBundleTitle = (bundleItems: ThreadItem[], arrive = false): ReactNode => {
-    const toolCallItems = bundleItems.filter((item) => safeText(item.type).toLowerCase() === "toolcall");
-    const callToolNames = Array.from(new Set(
-      bundleItems
-        .filter((item) => safeText(item.type).toLowerCase() === "toolcall")
-        .map((item) => safeText(item.tool).trim())
-        .filter(Boolean)
-    ));
-    const displayedCount = toolCallItems.length > 0 ? toolCallItems.length : bundleItems.length;
-    const toolLabel = callToolNames.length === 1
-      ? callToolNames[0]
-      : callToolNames.length > 1
-        ? "工具"
-        : "tool";
-    return <>调用工具 · {toolLabel} × <RollingToolCount count={Math.max(1, displayedCount)} arrive={arrive} /></>;
+    const summary = activityBundleSummary(bundleItems);
+    return <>{summary.hasTools ? `调用工具 · ${summary.toolLabel}` : '思考'} × <RollingToolCount count={Math.max(1, summary.count)} arrive={arrive} /></>;
   };
 
   const renderPersistedToolBundle = (
@@ -10973,10 +11002,11 @@ export function App() {
     const running = hasRunningTool;
     const expanded = Boolean(expandedToolBundles[bundleId]);
     const bundleGroups = getToolBundleGroups(bundleItems);
+    const reasoningOnly = !activityBundleSummary(bundleItems).hasTools;
     const arrive = toolArrivals.current.belongsToLiveView(bundleItems[0]?.id ?? "", threadViewTokenRef.current);
     return (
       <article
-        className={`messageItem kind-tool type-toolCall toolBundle${arrive ? " toolBundleArrival" : ""}${expanded ? " toolExpanded" : ""}${shimmering ? " live toolBundleShimmering" : ""}${running ? " toolBundleRunning" : ""}`}
+        className={`messageItem kind-tool type-toolCall toolBundle${reasoningOnly ? " reasoningOnlyBundle" : ""}${arrive ? " toolBundleArrival" : ""}${expanded ? " toolExpanded" : ""}${shimmering ? " live toolBundleShimmering" : ""}${running ? " toolBundleRunning" : ""}`}
         key={bundleId}
         data-message-key={bundleId}
         aria-expanded={expanded}
@@ -10999,6 +11029,7 @@ export function App() {
           });
         }}
       >
+        {reasoningOnly ? <ReasoningGlyph /> : null}
         <div className={`messageMeta toolBundleTitle${shimmering ? " live" : ""}`}>
           <span className="toolBundleTitleLabel">{summarizeToolBundleTitle(bundleItems, arrive)}</span>
         </div>
@@ -11188,7 +11219,7 @@ export function App() {
     let toolBundleIndex = 0;
     const flushTools = () => {
       if (!pendingTools.length) return;
-      if (pendingTools.some((item) => itemKind(item) === "tool")) {
+      if (activityBundleSummary(pendingTools).bundle) {
         rendered.push(renderPersistedToolBundle(
           `temporary-${turn.id}-tools-${toolBundleIndex++}`,
           [...pendingTools],
@@ -11912,7 +11943,11 @@ function getRunningTurnIdForThread(thread?: ThreadSummary | null): string | null
         )}
       />
 
-      {reclaudeAuthTarget ? <ReclaudeAuthorizationDialog key={selectedUserId} orgId={reclaudeAuthTarget.orgId}
+      {branchTarget?<BranchTargetDialog sourceModel={selectedThread?.configuredModel??selectedModelProfile.model} sourceEffort={selectedThread?.configuredReasoningEffort??selectedModelProfile.effort} pool={accountPool} profiles={modelProfiles} onClose={()=>setBranchTarget(null)} onConfirm={async target=>{
+        if(selectedThreadRef.current?.id!==branchTarget.threadId||selectedProject?.id!==branchTarget.projectId){setError("源会话已切换，请回到原会话重新选择分支点。");return false;}
+        return createBranchFromTurn({id:branchTarget.turnId},false,target);
+      }}/>:null}
+      {reclaudeAuthTarget ? <ReclaudeAuthorizationDialog key={`reclaude-auth:${selectedUserId}`} orgId={reclaudeAuthTarget.orgId}
         onClose={()=>setReclaudeAuthTarget(null)} onAuthenticated={()=>{void refreshModels();window.dispatchEvent(new Event("reclaude-authenticated"));}}/> : null}
       {runtimeMigration?<RuntimeMigrationDialog key={runtimeMigration.thread.id} threadId={runtimeMigration.thread.id} projectId={runtimeMigration.projectId}
         name={runtimeMigration.thread.name??runtimeMigration.thread.preview??"会话"} sourceClaude={isReclaudeModel(runtimeMigration.thread.configuredModel??selectedProject?.defaultModel)}
@@ -12068,8 +12103,8 @@ function getRunningTurnIdForThread(thread?: ThreadSummary | null): string | null
         </div>
       ) : null}
 
-      {renamingThread ? (
-        <div className="modalScrim" role="presentation" onMouseDown={(event) => {
+      {threadRenamePresence.present&&displayedRenamingThread ? (
+        <div className={`modalScrim${threadRenamePresence.closing?" uiClosing":""}`} aria-hidden={threadRenamePresence.closing} inert={threadRenamePresence.closing} role="presentation" onMouseDown={(event) => {
           if (event.target === event.currentTarget) {
             closeThreadRename();
           }
@@ -12099,22 +12134,22 @@ function getRunningTurnIdForThread(thread?: ThreadSummary | null): string | null
                 }
               }}
               maxLength={160}
-              disabled={renamingThreadId === renamingThread.id}
+              disabled={renamingThreadId === displayedRenamingThread.id}
             />
             <div className="dialogActions">
-              <button className="iconTextButton" type="button" onClick={closeThreadRename} disabled={renamingThreadId === renamingThread.id}>
+              <button className="iconTextButton" type="button" onClick={closeThreadRename} disabled={renamingThreadId === displayedRenamingThread.id}>
                 取消
               </button>
-              <button className="iconTextButton primary" type="submit" disabled={renamingThreadId === renamingThread.id || !threadRenameDraft.trim()}>
-                {renamingThreadId === renamingThread.id ? "重命名中" : "保存"}
+              <button className="iconTextButton primary" type="submit" disabled={renamingThreadId === displayedRenamingThread.id || !threadRenameDraft.trim()}>
+                {renamingThreadId === displayedRenamingThread.id ? "重命名中" : "保存"}
               </button>
             </div>
           </form>
         </div>
       ) : null}
 
-      {renamingProject ? (
-        <div className="modalScrim" role="presentation" onMouseDown={(event) => {
+      {projectRenamePresence.present&&displayedRenamingProject ? (
+        <div className={`modalScrim${projectRenamePresence.closing?" uiClosing":""}`} aria-hidden={projectRenamePresence.closing} inert={projectRenamePresence.closing} role="presentation" onMouseDown={(event) => {
           if (event.target === event.currentTarget) {
             closeProjectRename();
           }
@@ -12144,14 +12179,14 @@ function getRunningTurnIdForThread(thread?: ThreadSummary | null): string | null
                 }
               }}
               maxLength={120}
-              disabled={renamingProjectId === renamingProject.id}
+              disabled={renamingProjectId === displayedRenamingProject.id}
             />
             <div className="dialogActions">
-              <button className="iconTextButton" type="button" onClick={closeProjectRename} disabled={renamingProjectId === renamingProject.id}>
+              <button className="iconTextButton" type="button" onClick={closeProjectRename} disabled={renamingProjectId === displayedRenamingProject.id}>
                 取消
               </button>
-              <button className="iconTextButton primary" type="submit" disabled={renamingProjectId === renamingProject.id || !projectRenameDraft.trim()}>
-                {renamingProjectId === renamingProject.id ? "重命名中" : "保存"}
+              <button className="iconTextButton primary" type="submit" disabled={renamingProjectId === displayedRenamingProject.id || !projectRenameDraft.trim()}>
+                {renamingProjectId === displayedRenamingProject.id ? "重命名中" : "保存"}
               </button>
             </div>
           </form>
@@ -12164,7 +12199,7 @@ function getRunningTurnIdForThread(thread?: ThreadSummary | null): string | null
             <div className="directoryDialogHeader">
               <div>
                 <h2 id="directory-browser-title">选择项目目录</h2>
-                <p>{directoryBrowser?.currentPath ?? projectRoot}</p>
+                <p className="directoryCurrentPath" title={directoryBrowser?.currentPath ?? projectRoot}>{directoryBrowser?.currentPath ?? projectRoot}</p>
               </div>
               <button className="iconButton" type="button" onClick={closeDirectoryBrowser} title="关闭">
                 <X size={16} />
@@ -12207,13 +12242,14 @@ function getRunningTurnIdForThread(thread?: ThreadSummary | null): string | null
                   className="directoryRow"
                   type="button"
                   key={entry.path}
+                  title={entry.path}
+                  aria-label={`打开 ${entry.name}，路径 ${entry.path}`}
                   onClick={() => void openDirectoryBrowser(entry.path)}
                   disabled={directoryBrowserLoading || directoryCreating}
                 >
                   <FolderOpen size={16} />
                   <span>
                     <strong>{entry.name}</strong>
-                    <small>{entry.path}</small>
                   </span>
                 </button>
               ))}
@@ -12679,7 +12715,7 @@ function getRunningTurnIdForThread(thread?: ThreadSummary | null): string | null
         {error ? (
           <div className="errorBanner" role="alert">
             <span className="errorBannerMessage">{error}</span>
-            {archiveBranchRetry&&archiveBranchRetry.threadId===selectedThread?.id?<button className="branchArchiveRetry" type="button" disabled={branchingThread} onClick={event=>{event.stopPropagation();if(archiveBranchRetry)void createBranchFromTurn({id:archiveBranchRetry.turnId},true);}}>精简较早的工具结果后分支</button>:null}
+            {archiveBranchRetry&&archiveBranchRetry.threadId===selectedThread?.id?<button className="branchArchiveRetry" type="button" disabled={branchingThread} onClick={event=>{event.stopPropagation();if(archiveBranchRetry)void createBranchFromTurn({id:archiveBranchRetry.turnId},true,archiveBranchRetry.target);}}>精简较早的工具结果后分支</button>:null}
             <button className="iconButton errorBannerDismiss" type="button" aria-label="关闭错误提示" title="关闭错误提示" onClick={() => setError("")}><X size={16} /></button>
           </div>
         ) : null}
@@ -13141,7 +13177,7 @@ function getRunningTurnIdForThread(thread?: ThreadSummary | null): string | null
                     disabled={!exhaustedAccountNotice.hasAvailableAlternative || !latestBranchableTurn || branchingThread}
                     title={!latestBranchableTurn ? "当前没有可分支的已完成回答" : undefined}
                     onClick={() => {
-                      if (latestBranchableTurn) void createBranchFromTurn(latestBranchableTurn);
+                      if (latestBranchableTurn) chooseBranchTarget(latestBranchableTurn);
                     }}
                   >
                     <GitBranch size={14} /> {branchingThread ? "分支中…" : "分支"}
@@ -13161,7 +13197,7 @@ function getRunningTurnIdForThread(thread?: ThreadSummary | null): string | null
                     type="button"
                     onClick={() => {
                       if (!latestBranchableTurn) return;
-                      void createBranchFromTurn(latestBranchableTurn);
+                      chooseBranchTarget(latestBranchableTurn);
                     }}
                     disabled={!latestBranchableTurn || branchingThread}
                   >
@@ -13470,12 +13506,14 @@ function getRunningTurnIdForThread(thread?: ThreadSummary | null): string | null
                     // A late public reasoning summary may precede the calls.
                     // Keep the bundle anchored to its first actual tool so it
                     // does not remount or forget expansion when that fills in.
-                    const bundleAnchor = pendingToolGroup.find(item => itemKind(item) === "tool") ?? pendingToolGroup[0];
+                    const firstBundleId = `${turn.id}-toolbundle-${pendingToolGroup[0].id}`;
+                    const bundleAnchor = expandedToolBundles[firstBundleId] ? pendingToolGroup[0]
+                      : pendingToolGroup.find(item => itemKind(item) === "tool") ?? pendingToolGroup[0];
                     const bundleId = `${turn.id}-toolbundle-${bundleAnchor.id}`;
                     const isLiveRunningTurn = Boolean(selectedActiveTurnId && turn.id === selectedActiveTurnId);
                     const keepShimmering = isLiveRunningTurn && !answerAlreadyStarting;
                     const isBundleComplete = !isLiveRunningTurn || pendingToolGroup.every((toolItem) => safeText(toolItem.type).toLowerCase() !== "toolcall" || toolItem.completed !== false);
-                    if (pendingToolGroup.some((item) => itemKind(item) === "tool")) {
+                    if (activityBundleSummary(pendingToolGroup).bundle) {
                       renderedHistoryItems.push(
                         renderPersistedToolBundle(
                           bundleId,
@@ -13594,7 +13632,7 @@ function getRunningTurnIdForThread(thread?: ThreadSummary | null): string | null
                           <button type="button" title="复制本次回答全部文字" aria-label="复制本次回答全部文字" onClick={() => void copyPlainText(turnAgentText)}>
                             <ActionCopy size={15} />
                           </button>
-                          <button type="button" title={branchingThread ? "正在创建分支" : "从此回答直接创建新会话"} aria-label="从此回答直接创建新会话" aria-busy={branchingTurnKey === `${selectedThread?.id}:${turn.id}`} disabled={branchingThread} onClick={() => void createBranchFromTurn(turn)}>
+                          <button type="button" title={branchingThread ? "正在创建分支" : "选择账号并从此回答分支"} aria-label="选择账号并从此回答分支" aria-busy={branchingTurnKey === `${selectedThread?.id}:${turn.id}`} disabled={branchingThread} onClick={() => {if(selectedThread&&selectedProject)setBranchTarget({threadId:selectedThread.id,projectId:selectedProject.id,turnId:turn.id});}}>
                             {branchingTurnKey === `${selectedThread?.id}:${turn.id}`
                               ? <span className="branchCreatingSpinner" role="status" aria-label="正在创建分支" />
                               : <ActionBranch size={15} />}

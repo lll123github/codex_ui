@@ -1,8 +1,12 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { cancelReclaudeAuthorization, readReclaudeAuthorization, startReclaudeAuthorization } from "./api";
 import { newReclaudeAuthorizationRequestId, reclaudeAuthorizationPending, reclaudeAuthorizationUrl, type ReclaudeAuthorizationStatus } from "../shared/reclaudeAuthorization";
 import "./reclaudeAuthorization.css";
 import { usePopoverEscape } from "./usePopoverEscape";
+import { BranchChoice } from "./BranchChoice";
+import { X } from "./PanelIcons";
+import "./taskNotificationSettings.css";
 
 const phases = {
   starting:"正在准备认证…", logging_out:"正在退出所选账号…", waiting_authorization:"请在认证页面完成登录并批准此设备。",
@@ -11,7 +15,15 @@ const phases = {
 export function ReclaudeAuthorizationDialog({ orgId, onClose, onAuthenticated }: {
   orgId?: string; onClose: () => void; onAuthenticated: () => void;
 }) {
-  usePopoverEscape(true, onClose);
+  const [closing, setClosing] = useState(false);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function close() {
+    if (closeTimer.current) return;
+    setClosing(true);
+    closeTimer.current = setTimeout(onClose, 220);
+  }
+  usePopoverEscape(true, close);
+  useEffect(() => () => { if (closeTimer.current) clearTimeout(closeTimer.current); }, []);
   const [status, setStatus] = useState<ReclaudeAuthorizationStatus | null>(null);
   const [selected, setSelected] = useState(orgId ?? "");
   const [submitting, setSubmitting] = useState(false), [error, setError] = useState("");
@@ -68,13 +80,12 @@ export function ReclaudeAuthorizationDialog({ orgId, onClose, onAuthenticated }:
     finally { setSubmitting(false); }
   };
   const link = operation?.owned && operation.authorizationUrl ? reclaudeAuthorizationUrl(operation.authorizationUrl) : null;
-  return <div className="modalScrim reclaudeAuthScrim" onMouseDown={event => { if (event.target === event.currentTarget) onClose(); }}>
-    <section className="reclaudeAuthDialog" role="dialog" aria-modal="true" aria-label="ReClaude 重新认证">
-      <header><h2>重新认证</h2><button type="button" className="iconButton" aria-label="关闭重新认证" onClick={onClose}>×</button></header>
-      <p>退出并重新登录所选共享账号。原会话会保留，下次发送内容时自动接续或迁移。</p>
-      <label>账号<select aria-label="重新认证的账号" value={selected} onChange={event => setSelected(event.target.value)} disabled={!!active || submitting}>
-        {status?.organizations.map(row => <option key={row.orgId} value={row.orgId}>ReClaude · {row.label}</option>)}
-      </select></label>
+  const content = <div className={`taskNotificationScrim reclaudeAuthScrim${closing ? " uiClosing" : ""}`} aria-hidden={closing} inert={closing} onMouseDown={event => { if (event.target === event.currentTarget) close(); }}>
+    <section className="taskNotificationDialog reclaudeAuthDialog" role="dialog" aria-modal="true" aria-label="ReClaude 重新认证">
+      <header><h2>重新认证</h2><button type="button" className="taskNotificationIcon" aria-label="关闭重新认证" onClick={close}><X size={16}/></button></header>
+      <p>将退出所选共享账号并重新登录，可能暂时中断使用该账号的会话。原历史保留。</p>
+      <BranchChoice label="账号" value={selected} onChange={setSelected} disabled={!!active || submitting}
+        options={status?.organizations.map(row => ({value:row.orgId,label:`ReClaude · ${row.label}`})) ?? []}/>
       {!status ? <p role="status">正在读取账号状态…</p> : !status.enabled ? <p role="status">当前服务尚未启用重新认证。</p> : null}
       {operation ? <div className="reclaudeAuthStatus" role="status">
         <strong>{phases[operation.phase]}</strong>
@@ -83,9 +94,10 @@ export function ReclaudeAuthorizationDialog({ orgId, onClose, onAuthenticated }:
       </div> : null}
       {error ? <p className="reclaudeAuthError" role="alert">{error}</p> : null}
       <footer>
-        {active && operation?.owned ? <button type="button" onClick={() => void cancel()} disabled={submitting}>取消认证</button> : null}
-        <button type="button" onClick={() => void begin()} disabled={!status?.enabled || !selected || !!active || submitting}>{submitting ? "正在处理…" : "退出并重新登录"}</button>
+        {active && operation?.owned ? <button type="button" className="taskNotificationTest" onClick={() => void cancel()} disabled={submitting}>取消认证</button> : null}
+        <button type="button" className="taskNotificationTest" onClick={() => void begin()} disabled={!status?.enabled || !selected || !!active || submitting}>{submitting ? "正在处理…" : "退出并重新登录"}</button>
       </footer>
     </section>
   </div>;
+  return typeof document === "undefined" ? content : createPortal(content, document.body);
 }
