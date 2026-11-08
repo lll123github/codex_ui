@@ -419,10 +419,13 @@ describe("Claude conversation switching",()=>{
   it("branches to a different organization entirely offline, inherits full UI history and resumes only the new native id",async()=>{
     const f=fixture(), id=await f.start(), first=await f.turn(id);
     const parent=f.service.storage.get(id)!;
+    parent.nativeTasks=[{id:'parent-task',kind:'agent',description:'父会话的后台任务',background:true,status:'running'}];f.service.storage.save(parent);
     const refreshCalls=vi.mocked(f.service.bindings.refresh).mock.calls.length;
     const result=await f.service.request("thread/fork",{threadId:id,model:"reclaude-sonnet@2",lastTurnId:first}) as any;
     expect(vi.mocked(f.service.bindings.refresh).mock.calls).toHaveLength(refreshCalls);
     const child=f.service.storage.get(result.thread.id)!;
+    expect(child.nativeTasks).toBeUndefined();expect(f.service.tasks('admin',child.id).data).toEqual([]);
+    expect(f.service.storage.get(id)?.nativeTasks?.[0].id).toBe('parent-task');
     expect(child.nativeSessionId).not.toBe(parent.nativeSessionId); expect(child.orgId).toBe("2");
     expect(f.calls).toHaveLength(1);
     expect(f.service.history(child.id).thread.turns[0].id).toBe(first);
@@ -488,6 +491,17 @@ describe("Claude conversation switching",()=>{
       expect((await app.inject({method:"POST",url:"/api/reclaude/authorization/start",payload:{orgId:"999",requestId:randomUUID()}})).statusCode).toBe(403);
       expect((await app.inject({method:"POST",url:"/api/reclaude/authorization/start",headers:{"sec-fetch-site":"cross-site"},payload:{orgId:"1",requestId:randomUUID()}})).statusCode).toBe(403);
       expect((await app.inject({method:"POST",url:"/api/reclaude/authorization/cancel",payload:{id:randomUUID()}})).statusCode).toBe(403);
+      const taskConversation=service.storage.get(id)!;
+      taskConversation.nativeTasks=[{id:'owned-task',kind:'shell',description:'后台测试',status:'running',background:true,runId:'private-run',toolUseId:'private-call',summary:'任务摘要'},
+        {id:'foreground-task',kind:'shell',description:'前台命令',status:'running',background:false}];
+      service.storage.save(taskConversation);
+      const tasks=await app.inject({method:'GET',url:`/api/projects/${f.project.id}/threads/${id}/tasks`});
+      expect(tasks.statusCode).toBe(200);expect(tasks.headers['cache-control']).toContain('no-store');
+      expect(tasks.json()).toMatchObject({supported:true,data:[{id:'owned-task',description:'后台测试',status:'unknown',summary:'任务摘要'}]});
+      expect(tasks.json().data).toHaveLength(1);expect(tasks.body).not.toContain('private-run');expect(tasks.body).not.toContain('private-call');
+      expect(()=>service.tasks('outsider',id)).toThrow('其他用户');
+      f.store.ensureUser('tasks-outsider');const taskUser=vi.spyOn(authentication,'authenticatedUserFromHeaders').mockReturnValue('tasks-outsider');
+      try{const denied=await app.inject({method:'GET',url:`/api/projects/${f.project.id}/threads/${id}/tasks`});expect([403,404]).toContain(denied.statusCode);expect(denied.body).not.toContain('任务摘要');}finally{taskUser.mockRestore();}
       const archiveFile=path.join(service.config.storageDirectory,"fixture-tools.gz"),archiveBody=gzipSync('full-native-tool-record\n');fs.writeFileSync(archiveFile,archiveBody,{mode:0o600});
       const conversation=service.storage.get(id)!;conversation.toolOutputArchive={path:archiveFile,summary:{version:1,threadId:id,sourceThreadId:id,keptRecentTurnIds:[],archivedRecords:1,archivedBytes:24,originalBranchBytes:200000000,branchBytes:1000,archiveBytes:archiveBody.length,createdAt:new Date().toISOString()}};service.storage.save(conversation);
       const attachment=await app.inject({method:"GET",url:`/api/projects/${f.project.id}/threads/${id}/tool-output-archive`});expect(attachment.statusCode).toBe(200);expect(attachment.json().data).toMatchObject({threadId:id,archivedRecords:1});expect(JSON.stringify(attachment.json())).not.toContain(archiveFile);

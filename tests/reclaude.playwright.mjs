@@ -69,6 +69,21 @@ try {
     await page.screenshot({path:`${evidence}/${mobile?"phone":"desktop"}-shared-quota.png`});
     await quota.dispatchEvent("click");
   }
+  // The task entry belongs below the real editor, including the compact phone composer.
+  for(const mobile of [false,true]) {
+    await page.setViewportSize(mobile?{width:393,height:852}:{width:1440,height:1000});
+    const footer=page.locator('.conversation > .conversationTasksFooter'),composer=page.locator('.conversation > .composer');
+    await expect(footer).toBeVisible();
+    await page.evaluate(()=>Promise.all(document.getAnimations().filter(animation=>animation.effect?.getTiming().iterations!==Infinity).map(animation=>animation.finished.catch(()=>{}))));
+    const [footerBox,composerBox]=await Promise.all([footer.boundingBox(),composer.boundingBox()]);
+    if(footerBox.y<composerBox.y+composerBox.height-1){
+      await page.screenshot({path:`${evidence}/task-footer-position-${mobile?'phone':'desktop'}.png`});
+      console.log(JSON.stringify({mobile,footerBox,composerBox,layout:await footer.evaluate(node=>({parentDisplay:getComputedStyle(node.parentElement).display,parentDirection:getComputedStyle(node.parentElement).flexDirection,order:getComputedStyle(node).order,composerPosition:getComputedStyle(node.previousElementSibling).position,composerOrder:getComputedStyle(node.previousElementSibling).order}))}));
+    }
+    assert.ok(footerBox.y>=composerBox.y+composerBox.height-1,'Task button must appear below the composer');
+    await footer.getByRole('button').click();const tasks=page.getByRole('dialog',{name:'子代理',exact:true});await expect(tasks).toBeVisible();
+    await page.keyboard.press('Escape');await expect(page.locator('.conversationTasksDialog')).toHaveCount(0);
+  }
   await page.setViewportSize({width:1440,height:1000});
   await post("claude-begin");
   const stream=event=>post("claude-event",{type:"stream_event",event});

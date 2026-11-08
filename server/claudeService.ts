@@ -29,6 +29,7 @@ import {claudeWebMcp,claudeSkills,claudeInput,claudeOfficeText} from './claudeHa
 import {claudeVisibleItems} from './claudeStreamAdapter.js';
 import {claudeForkCutoff} from './claudeSubagents.js';
 import {overlayJournal} from './timelineJournal.js';
+import type {ConversationTasksResponse} from '../shared/conversationTasks.js';
 
 type RecordValue = Record<string, any>;
 const object = (v: unknown): RecordValue => v && typeof v === "object" && !Array.isArray(v) ? v as RecordValue : {};
@@ -163,6 +164,17 @@ export class ClaudeService {
       status: { type: this.active.has(row.id) ? "active" : "idle" }, turns: [], archived: row.archived };
   }
   list(userId: string, projectId: string) { return this.storage.list(userId, projectId).map(row => this.summary(row)); }
+  tasks(userId:string,id:string):ConversationTasksResponse {
+    const row=this.row(id);
+    if(row.userId!==userId)throw new AppError('runtime_forbidden','无法读取其他用户的任务。');
+    return {supported:true,data:(row.nativeTasks??[]).filter(task=>task.kind==='agent'||task.background||task.wasBackground).map(task=>({
+      id:task.id,kind:task.kind??'unknown',description:task.description,
+      status:task.status==='running'&&!this.active.has(id)?'unknown':task.status,background:task.background,
+      ...(task.parentTaskId?{parentTaskId:task.parentTaskId}:{}),...(task.subagentType?{subagentType:task.subagentType}:{}),
+      ...(task.summary?{summary:task.summary}:{}),...(task.lastToolName?{lastToolName:task.lastToolName}:{}),
+      ...(task.updatedAt?{updatedAt:task.updatedAt}:{}),...(task.usage?{usage:task.usage}:{})
+    }))};
+  }
   toolArchive(userId: string, threadId: string) {
     const row = this.row(threadId), archive = row.toolOutputArchive;
     if (row.userId !== userId) throw new AppError("runtime_forbidden", "无法读取其他用户的工具结果附件。");
@@ -391,7 +403,7 @@ export class ClaudeService {
       const branchTime=Date.now();
       const fork = await this.branchNative(forkSource, binding, project.rootPath, branchName, cutoff), nativeSessionId = fork.nativeId;
       const child: ClaudeConversation = { ...row, id: randomUUID(), nativeSessionId, parentSessionId: row.nativeSessionId,
-        parentThreadId: row.id, inheritedTurnCount, initialized: true, model, orgId: binding.orgId, accountKey: binding.accountKey,
+        parentThreadId: row.id, inheritedTurnCount, nativeTasks: undefined, initialized: true, model, orgId: binding.orgId, accountKey: binding.accountKey,
         configRoot: binding.configRoot, projectId: project.id, cwd: project.rootPath, name: branchName, createdAt: Date.now(), updatedAt: Date.now(),
         ...(fork.toolOutputArchive ? {toolOutputArchive:fork.toolOutputArchive} : {}) };
       if(forkSource!==row&&row.contextHandoff)child.contextHandoff={...row.contextHandoff,rebuildFromNative:true};

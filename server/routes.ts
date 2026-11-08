@@ -4199,6 +4199,16 @@ export function registerRoutes(app: FastifyInstance, bridge: CodexBridge, store:
     }
   });
 
+  app.get<{Params:{id:string;threadId:string}}>("/api/projects/:id/threads/:threadId/tasks",async(request,reply)=>{
+    try{
+      reply.header('Cache-Control','private, no-store');
+      const userId=userIdFromRequest(request,store),project=store.getProject(request.params.id,userId);
+      if(!project)return reply.code(404).send({error:'Project not found.'});
+      if(!store.userCanAccessThread(request.params.threadId,userId,project.id))return reply.code(403).send({error:'Thread is not visible for this logged-in user.'});
+      return claudeService?.owns(request.params.threadId)?claudeService.tasks(userId,request.params.threadId):{data:[],supported:false};
+    }catch(error){return reply.code(errorStatus(error)).send({error:error instanceof Error?error.message:String(error)});}
+  });
+
   app.get<{ Params: { id: string; threadId: string }; Querystring: { view?: string; q?: string; cursor?: string; limit?: string } }>("/api/projects/:id/threads/:threadId/subagents", async (request, reply) => {
     try {
       reply.header("Cache-Control", "no-store");

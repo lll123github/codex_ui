@@ -549,6 +549,9 @@ export function listArchivedThreads(projectId: string, signal?:AbortSignal): Pro
 function subagentUrl(projectId: string, parentThreadId: string): string {
   return `/api/projects/${encodeURIComponent(projectId)}/threads/${encodeURIComponent(parentThreadId)}/subagents`;
 }
+export function readConversationTasks(projectId:string,threadId:string,signal?:AbortSignal):Promise<import('../shared/conversationTasks').ConversationTasksResponse>{
+  return request(`/api/projects/${encodeURIComponent(projectId)}/threads/${encodeURIComponent(threadId)}/tasks`,{cache:'no-store',signal});
+}
 
 export function listSubagentThreads(projectId: string, parentThreadId: string, signal?: AbortSignal, options: { view?: "all" | "active" | "history"; q?: string; cursor?: string; limit?: number } = {}): Promise<import("./types").SubagentDirectoryResponse> {
   const params = new URLSearchParams();

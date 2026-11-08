@@ -1,0 +1,60 @@
+.conversationTasksFooter {display:flex;justify-content:center;flex:0 0 auto;padding:4px 12px 7px;min-width:0;}
+/* The composer floats above the transcript. Reserve one real footer row in
+   its dock and in the existing transcript/scroll-button clearance. */
+.conversation:has(>.conversationTasksFooter) {--conversation-tasks-footer-height:32px;}
+.conversation>.conversationTasksFooter {position:absolute;z-index:3;bottom:18px;left:0;right:0;height:var(--conversation-tasks-footer-height);box-sizing:border-box;align-items:center;padding:0 10px;}
+.conversation:has(>.conversationTasksFooter)>.composer {bottom:calc(18px + var(--conversation-tasks-footer-height))!important;}
+.conversation:has(>.conversationTasksFooter) .conversationContent>.messages {--messages-bottom-clearance:calc(88px + var(--conversation-tasks-footer-height));}
+.conversation:has(>.conversationTasksFooter)>.scrollToBottomButton {bottom:calc(var(--composer-height,94px) + 30px + var(--conversation-tasks-footer-height))!important;}
+.conversation:has(>.conversationTasksFooter) .threadOpeningLayer {bottom:calc(var(--composer-height,94px) + 18px + var(--conversation-tasks-footer-height))!important;}
+.conversationTasksTrigger {display:flex;align-items:center;gap:7px;max-width:100%;padding:4px 9px;border:0;border-radius:8px;background:transparent;color:var(--muted,#aaa);font:inherit;font-size:12px;cursor:pointer;}
+.conversationTasksTrigger:hover,.conversationTasksTrigger[aria-expanded="true"] {background:var(--panel-strong,#8882);color:var(--text);}
+.conversationTasksCount {opacity:.75;}
+.conversationTasksScrim {z-index:12060;}
+.taskNotificationDialog.conversationTasksDialog {width:min(820px,100%);height:min(640px,82dvh);max-height:calc(100dvh - 32px);display:flex;flex-direction:column;overflow:hidden;}
+.conversationTasksActions {display:flex;gap:6px;align-items:center;}
+.conversationTasksControls {display:flex;justify-content:space-between;align-items:center;gap:12px;margin:18px 0 10px;flex-wrap:wrap;}
+.conversationTasksTabs {display:flex;gap:4px;}
+.conversationTasksTabs button {border:0;background:transparent;color:inherit;font:inherit;font-size:13px;border-radius:7px;padding:6px 10px;cursor:pointer;}
+.conversationTasksTabs [aria-selected="true"] {background:var(--panel-strong,#8882);}
+.conversationTasksControls input {box-sizing:border-box;min-width:0;width:180px;padding:7px 10px;border-radius:8px;border:1px solid var(--line,#8883);background:transparent;color:inherit;font:inherit;font-size:13px;}
+.conversationTasksBody {display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);min-height:0;flex:1;border-top:1px solid var(--line,#8883);}
+.conversationTasksList {overflow:auto;min-width:0;padding:10px 10px 10px 0;}
+.conversationTaskRow {display:flex;align-items:center;gap:9px;width:100%;padding:11px 8px;box-sizing:border-box;border:0;border-radius:9px;background:transparent;text-align:left;color:inherit;font:inherit;cursor:pointer;}
+.conversationTaskRow:hover,.conversationTaskRow.selected {background:var(--panel-strong,#8882);}
+.conversationTaskRow>svg {flex-shrink:0;color:var(--muted,#aaa);}
+.conversationTaskName {flex:1;min-width:0;display:grid;gap:4px;}
+.conversationTaskName strong {font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.conversationTaskName>span {font-size:11px;color:var(--muted,#aaa);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.conversationTaskState {font-size:11px;color:var(--muted,#aaa);white-space:nowrap;}
+.conversationTaskState.state-running,.conversationTaskState.state-dispatched {color:var(--teal,#85bcad);}
+.conversationTaskState.state-failed {color:var(--red,#e88);}
+.conversationTaskDetails {min-width:0;overflow:auto;border-left:1px solid var(--line,#8883);padding:18px;}
+.conversationTaskDetails h3 {font-size:15px;line-height:1.6;overflow-wrap:anywhere;margin:0 0 8px;}
+.conversationTaskDetails h4 {font-size:13px;font-weight:500;margin:20px 0 8px;}
+.conversationTaskDetails dl {display:grid;gap:7px;font-size:12px;line-height:1.5;margin-top:18px;}
+.conversationTaskDetails dt {color:var(--muted,#aaa);}
+.conversationTaskDetails dd {margin:0 0 5px;overflow-wrap:anywhere;}
+.conversationTaskSummary {white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:13px;line-height:1.65;margin:0 0 16px;}
+.conversationTaskDetailPlaceholder {display:grid;place-content:center;color:var(--muted,#aaa);font-size:13px;}
+.conversationTasksEmpty {padding:20px 10px;color:var(--muted,#aaa);font-size:13px;line-height:1.6;}
+.conversationTasksMore {display:flex;gap:5px;align-items:center;border:0;background:transparent;color:inherit;font:inherit;font-size:12px;padding:14px 8px;cursor:pointer;}
+.conversationTasksError {font-size:12px;color:var(--red,#e88);margin:0 0 10px;}
+.conversationTasksError button {border:0;background:transparent;color:inherit;font:inherit;text-decoration:underline;cursor:pointer;}
+.conversationTaskBack {display:none;}
+.conversationTaskDetails .taskNotificationTest {display:inline-flex;align-items:center;gap:6px;font-size:12px;}
+@media(max-width:720px){
+  .conversation>.conversationTasksFooter {bottom:max(10px,env(safe-area-inset-bottom));padding:0 6px;}
+  .conversation:has(>.conversationTasksFooter)>.composer {bottom:calc(max(10px,env(safe-area-inset-bottom)) + var(--conversation-tasks-footer-height))!important;}
+  .conversation:has(>.conversationTasksFooter)>.scrollToBottomButton {bottom:calc(var(--composer-height,94px) + max(22px,env(safe-area-inset-bottom)) + var(--conversation-tasks-footer-height))!important;}
+  .conversation:has(>.conversationTasksFooter) .threadOpeningLayer {bottom:calc(var(--composer-height,94px) + max(10px,env(safe-area-inset-bottom)) + var(--conversation-tasks-footer-height))!important;}
+  .conversationTasksTrigger {font-size:11px;}
+  .taskNotificationDialog.conversationTasksDialog {height:min(620px,80dvh);padding:18px;}
+  .conversationTasksBody {display:block;overflow:hidden;}
+  .conversationTasksList {height:100%;padding-right:0;}
+  .conversationTaskDetails {display:none;height:100%;box-sizing:border-box;border-left:0;padding:14px 0;}
+  .conversationTasksBody.hasSelection .conversationTasksList {display:none;}
+  .conversationTasksBody.hasSelection .conversationTaskDetails {display:block;}
+  .conversationTasksControls input {width:100%;font-size:16px;}
+  .conversationTaskBack {display:block;background:transparent;border:0;color:var(--muted,#aaa);font:inherit;font-size:12px;padding:0 0 15px;cursor:pointer;}
+}

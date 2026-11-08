@@ -82,6 +82,13 @@ describe("Claude runtime boundaries", () => {
     expect(notifications.some(n=>n.method==='runtime/claudeResumePending')).toBe(false);
     expect(notifications.at(-1)?.params).toMatchObject({turn:{status:'failed',error:{code:'claude_empty_response'}}});
   });
+  it('does not hold a completed turn open merely because a foreground progress frame arrived without its start',async()=>{
+    const {runtime,input,notifications}=fixture(async()=>query([init,{type:'system',subtype:'task_progress',task_id:'foreground',subagent_type:'general-purpose',summary:'检查中'},success]));
+    await runtime.runTurn(input);
+    expect(notifications.some(event=>event.method==='runtime/claudeBackgroundWait')).toBe(false);
+    expect((notifications.find(event=>event.method==='runtime/claudeTasks')?.params as {tasks?:unknown}|undefined)?.tasks).toMatchObject([{id:'foreground',background:false}]);
+    expect(notifications.at(-1)?.params).toMatchObject({turn:{status:'completed'}});
+  });
   it('keeps a query alive after the parent result until background results are consumed and summarized',async()=>{
     let release!:()=>void;const gate=new Promise<void>(r=>release=r),closed=vi.fn();
     const {runtime,input,notifications}=fixture(async()=>({close:closed,async *[Symbol.asyncIterator](){

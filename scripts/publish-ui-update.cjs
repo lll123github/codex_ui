@@ -7,7 +7,7 @@ const version = process.argv[2];
 const target = process.argv[3];
 const targets = target?.split(',');
 const notice = process.argv[4];
-if (targets?.some(entry => !['account', 'plugins', 'questions', 'plan', 'threads', 'runtime'].includes(entry))) throw new Error('Invalid update target');
+if (targets?.some(entry => !['account', 'plugins', 'questions', 'plan', 'threads', 'runtime', 'tasks'].includes(entry))) throw new Error('Invalid update target');
 if (!/^[a-zA-Z0-9._:-]{1,128}$/.test(version ?? '')) throw new Error('Usage: node scripts/publish-ui-update.cjs <unique-release-version>');
 const directory = path.resolve(__dirname, '../data/backend/ui-updates');
 fs.mkdirSync(directory, { recursive: true, mode: 0o700 });

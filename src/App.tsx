@@ -127,7 +127,9 @@ import { GoalProgress } from "./GoalProgress";
 import { useThreadGoal } from "./threadGoal";
 import { useThreadSchedules } from "./threadSchedules";
 import { ThreadSchedules, threadScheduleSummary } from "./ThreadSchedules";
-import { SubagentActivity, SubagentToolCard } from "./SubagentActivity";
+import { SubagentToolCard } from "./SubagentActivity";
+import { ConversationTasks } from "./ConversationTasks";
+import { conversationTasksEvent } from "./conversationTasks";
 import { observeComposerViewportMetrics } from "./composerViewportMetrics";
 import { observeShellPresentation } from "./shellPresentation";
 import { SubagentPanel } from "./SubagentPanel";
@@ -10495,6 +10497,10 @@ export function App() {
         return;
       }
       const params = notification.params ?? {};
+      if (notification.method === "runtime/claudeTasks") {
+        window.dispatchEvent(new CustomEvent(conversationTasksEvent, { detail: { userId: selectedUserId, threadId: params.threadId } }));
+        return;
+      }
       if(notification.method==='runtime/initialized'&&params.runtime==='claude-code'&&typeof params.threadId==='string'&&Array.isArray(params.tools)&&Array.isArray(params.mcpServers)){
         const runtimeCapabilities={model:String(params.model??''),tools:params.tools as string[],skills:Array.isArray(params.skills)?params.skills as string[]:[],mcpServers:params.mcpServers as Array<{name:string;status:string}>};
         setSelectedThread(previous=>previous&&previous.id===params.threadId?{...previous,runtimeCapabilities}:previous);
@@ -13891,7 +13897,6 @@ function getRunningTurnIdForThread(thread?: ThreadSummary | null): string | null
                   }} />
                   <ToolReveal key={`progress:${selectedUserId}:${selectedThread?.id ?? "new"}`} open={Boolean(selectedThread?.id && turnProgress[`${selectedUserId}:${selectedThread.id}`]?.turnId === selectedActiveTurnId)}><div className="composerRunNotice" role="status">{turnProgressText(selectedThread?.id ? turnProgress[`${selectedUserId}:${selectedThread.id}`] : undefined)}</div></ToolReveal>
                   <GoalProgress key={`goal:${selectedUserId}:${selectedThread?.id ?? "new"}`} controller={threadGoal} running={conversationRunState === "running"} />
-                  <SubagentActivity key={`agents:${selectedUserId}:${selectedThread?.id ?? "new"}`} agents={composerAgents} directoryPage={subagentDirectory.page} parentRunning={Boolean(selectedActiveTurnId)} taskKey={selectedActiveTurnId ?? "idle"} onOpen={openSubagentReview} onOpenHistory={() => openSubagentReview(undefined, "history")} />
                   <ToolReveal open={Boolean(documentReference && documentReference.projectId === selectedProject?.id)}><div className="composerDocumentReference"><FileText size={14} /><span title={documentReference?.text}><strong>{documentReference?.path}</strong> · {documentReference?.text.slice(0, 120)}</span><button type="button" aria-label="移除文档引用" onClick={() => setDocumentReference(null)}><X size={14} /></button></div></ToolReveal>
                 </div>
                 <div className="composerControlRow">
@@ -14091,6 +14096,9 @@ function getRunningTurnIdForThread(thread?: ThreadSummary | null): string | null
                 />
               </div>
             </div>
+            {selectedProject && selectedThread ? <ConversationTasks key={`tasks:${selectedUserId}:${selectedThread.id}`} userId={selectedUserId} projectId={selectedProject.id} threadId={selectedThread.id}
+              native={isReclaudeModel(selectedThread.configuredModel ?? selectedModelProfile.model)} agents={composerAgents} directoryPage={subagentDirectory.page} parentRunning={Boolean(selectedActiveTurnId)}
+              onOpenAgent={openSubagentReview} onOpenHistory={() => openSubagentReview(undefined, "history")} /> : null}
           </section>
           </div>
           <RightWorkspace scope={`${selectedUserId}:${selectedThread?.id ?? "new"}`} open={rightWorkspaceOpen} active={rightWorkspaceTab} width={diffPanelWidth} tabs={rightTabs}
