@@ -24,14 +24,14 @@ try{
     await context.addInitScript(()=>{window.__backgroundKeys=0;window.addEventListener('keydown',event=>{if(event.key==='Escape'||event.key==='Enter'&&event.ctrlKey)window.__backgroundKeys++;});});
     const page=await context.newPage();page.on('pageerror',error=>errors.push(error.message));await page.goto(origin+'/tests/conversationTasks.html');
     const input=page.getByRole('textbox',{name:'任务输入'}),draft=await input.inputValue(),trigger=page.locator('.conversationTasksTrigger');
-    await expect(trigger).toContainText('2 项进行中');const inputBox=await input.boundingBox(),triggerBox=await trigger.boundingBox();assert.ok(triggerBox.y>=inputBox.y+inputBox.height);
+    await expect(trigger.locator('.conversationTasksCount')).toHaveText('2');const inputBox=await input.boundingBox(),triggerBox=await trigger.boundingBox();assert.ok(triggerBox.y>=inputBox.y+inputBox.height);
     await trigger.click();const dialog=page.getByRole('dialog',{name:'子代理与后台任务'}),list=page.getByLabel('会话任务列表');
     await expect(list.locator('.conversationTaskRow')).toHaveCount(4);await expect(list.getByRole('button',{name:/检查接口/})).toHaveCount(1);
     await dialog.getByRole('tab',{name:'后台任务',exact:true}).click();await expect(list.locator('.conversationTaskRow')).toHaveCount(2);
     await list.getByRole('button',{name:/运行测试/}).click();const detail=page.getByLabel('任务详情');await expect(detail).toContainText('测试已经启动');
     tasks[1]={...tasks[1],status:'completed',summary:'全部测试通过'};
     await page.evaluate(()=>window.dispatchEvent(new CustomEvent('codex:conversation-tasks',{detail:{userId:'alice',threadId:'thread-a'}})));
-    await expect(detail).toContainText('全部测试通过');await expect(detail).toContainText('已完成');await expect(trigger).toContainText('1 项进行中');
+    await expect(detail).toContainText('全部测试通过');await expect(detail).toContainText('已完成');await expect(trigger.locator('.conversationTasksCount')).toHaveText('1');
     if(mobile)await detail.getByRole('button',{name:'返回任务列表'}).click();
     await dialog.getByRole('tab',{name:'子代理',exact:true}).click();await list.getByRole('button',{name:/检查接口/}).click();await expect(detail).toContainText('Read');
     await detail.getByRole('button',{name:'打开完整执行记录'}).click();await expect(dialog).toHaveCount(0);await expect(page.getByLabel('已打开的执行记录')).toHaveText('agent-a');
@@ -49,7 +49,7 @@ try{
     await page.screenshot({path:`${output}/${mobile?'phone':'desktop'}-list.png`});
     await page.getByLabel('会话任务列表').getByRole('button',{name:/已结束的构建/}).click();await expect(page.getByLabel('任务详情')).toContainText('构建成功');
     await page.screenshot({path:`${output}/${mobile?'phone':'desktop'}.png`});
-    assert.deepEqual(errors,[]);assert.deepEqual(writes,[]);results.push({mobile,footerBelowInput:true,agentDeduplicated:true,backgroundProgressUpdates:true,transcriptNavigation:true,scopeIsolation:true,codexCompatible:true,draftPreserved:true,keyboardDoesNotStopOrSend:true,errors});await context.close();
+    assert.deepEqual(errors,[]);assert.deepEqual(writes,[]);results.push({mobile,taskTriggerVisible:true,agentDeduplicated:true,backgroundProgressUpdates:true,transcriptNavigation:true,scopeIsolation:true,codexCompatible:true,draftPreserved:true,keyboardDoesNotStopOrSend:true,errors});await context.close();
   }
 }finally{await browser.close();await vite.close();}
 const result={passed:true,cases:results,productionMutations:0,realModelRequests:0};await fs.writeFile(output+'/results.json',JSON.stringify(result,null,2)+'\n');console.log(JSON.stringify(result));

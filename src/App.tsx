@@ -5206,7 +5206,7 @@ export function App() {
     () => modelProfileById(activeModelProfileId, selectableModelProfiles),
     [activeModelProfileId, selectableModelProfiles]
   );
-  const resolveServiceTier=(enabled:boolean)=>resolveNativeServiceTier(enabled&&!isReclaudeModel(selectedModelProfile.model));
+  const resolveServiceTier=(enabled:boolean,model=selectedModelProfile.model)=>resolveNativeServiceTier(enabled&&!isReclaudeModel(model));
   const temporaryModelProfile = useMemo(
     () => modelProfileById(temporaryModelProfileId, modelProfiles),
     [temporaryModelProfileId, modelProfiles]
@@ -5348,7 +5348,7 @@ export function App() {
         prompt: text,
         model: temporaryModelProfile.model,
         reasoningEffort: temporaryModelProfile.effort,
-        serviceTier: resolveServiceTier(codexFastModeEnabled),
+        serviceTier: resolveServiceTier(codexFastModeEnabled, temporaryModelProfile.model),
         sandbox,
         approvalPolicy,
       } : {
@@ -5361,7 +5361,7 @@ export function App() {
         prompt: text,
         model: temporaryModelProfile.model,
         reasoningEffort: temporaryModelProfile.effort,
-        serviceTier: resolveServiceTier(codexFastModeEnabled),
+        serviceTier: resolveServiceTier(codexFastModeEnabled, temporaryModelProfile.model),
         sandbox,
         approvalPolicy,
       });
@@ -8922,6 +8922,11 @@ export function App() {
       return true;
     }
     if (command === "fast") {
+      if (isReclaudeModel(selectedModelProfile.model)) {
+        addLocalMessage("Claude 模型不支持 Fast 模式。");
+        setPrompt("");
+        return true;
+      }
       const next = !codexFastModeEnabled;
       setCodexFastModeEnabled(next);
       window.localStorage.setItem(codexFastModeStorageKey(selectedUserId), String(next));
@@ -13922,10 +13927,9 @@ function getRunningTurnIdForThread(thread?: ThreadSummary | null): string | null
                           : threadContextFeatureEnabled ? `新会话上下文 ${contextConfigShortLabel(newThreadContextConfig)}` : "会话状态"}</span>
                     </button>
                   ) : null}
-                  <button
+                  {!isReclaudeModel(selectedModelProfile.model) ? <button
                     className={`iconTextButton v2FastModeButton ${codexFastModeEnabled ? "v2FastModeButtonActive" : ""}`}
                     type="button"
-                    disabled={isReclaudeModel(selectedModelProfile.model)}
                     onClick={() => {
                       const next = !codexFastModeEnabled;
                       setCodexFastModeEnabled(next);
@@ -13933,10 +13937,13 @@ function getRunningTurnIdForThread(thread?: ThreadSummary | null): string | null
                         window.localStorage.setItem(codexFastModeStorageKey(selectedUserId), String(next));
                       }
                     }}
-                    title={isReclaudeModel(selectedModelProfile.model)?'尚未验证此账号的 Claude Fast 资格与计费，暂不启用':codexFastModeEnabled ? "已开启 Fast 模式（下次请求会带 service_tier: fast）" : "开启 Fast 模式"}
+                    title={codexFastModeEnabled ? "已开启 Fast 模式（下次请求会带 service_tier: fast）" : "开启 Fast 模式"}
                   >
-                    <span>{isReclaudeModel(selectedModelProfile.model)?'Fast —':codexFastModeEnabled ? "Fast On" : "Fast Off"}</span>
-                  </button>
+                    <span>{codexFastModeEnabled ? "Fast On" : "Fast Off"}</span>
+                  </button> : null}
+                  {selectedProject && selectedThread ? <ConversationTasks key={`tasks:${selectedUserId}:${selectedThread.id}`} userId={selectedUserId} projectId={selectedProject.id} threadId={selectedThread.id}
+                    native={isReclaudeModel(selectedThread.configuredModel ?? selectedModelProfile.model)} agents={composerAgents} directoryPage={subagentDirectory.page} parentRunning={Boolean(selectedActiveTurnId)}
+                    onOpenAgent={openSubagentReview} onOpenHistory={() => openSubagentReview(undefined, "history")} /> : null}
                   <ModelGroupedSelect
                     value={activeModelProfileId}
                     onChange={(profileId) => void changeConversationModelProfile(profileId)}
@@ -14096,9 +14103,6 @@ function getRunningTurnIdForThread(thread?: ThreadSummary | null): string | null
                 />
               </div>
             </div>
-            {selectedProject && selectedThread ? <ConversationTasks key={`tasks:${selectedUserId}:${selectedThread.id}`} userId={selectedUserId} projectId={selectedProject.id} threadId={selectedThread.id}
-              native={isReclaudeModel(selectedThread.configuredModel ?? selectedModelProfile.model)} agents={composerAgents} directoryPage={subagentDirectory.page} parentRunning={Boolean(selectedActiveTurnId)}
-              onOpenAgent={openSubagentReview} onOpenHistory={() => openSubagentReview(undefined, "history")} /> : null}
           </section>
           </div>
           <RightWorkspace scope={`${selectedUserId}:${selectedThread?.id ?? "new"}`} open={rightWorkspaceOpen} active={rightWorkspaceTab} width={diffPanelWidth} tabs={rightTabs}
