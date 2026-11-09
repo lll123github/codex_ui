@@ -129,6 +129,7 @@ import { useThreadSchedules } from "./threadSchedules";
 import { ThreadSchedules, threadScheduleSummary } from "./ThreadSchedules";
 import { SubagentToolCard } from "./SubagentActivity";
 import { ConversationTasks } from "./ConversationTasks";
+import { isInternalRuntimeUserText } from './runtimeUserMessages';
 import { conversationTasksEvent } from "./conversationTasks";
 import { observeComposerViewportMetrics } from "./composerViewportMetrics";
 import { observeShellPresentation } from "./shellPresentation";
@@ -1316,20 +1317,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isThreadItem(value: unknown): value is ThreadItem {
   return isRecord(value) && typeof (value as { id?: unknown }).id === "string";
-}
-
-function isInternalRuntimeUserText(value: string): boolean {
-  const text = value.trimStart();
-  return text.startsWith("<environment_context>")
-    || text.startsWith("<codex_internal_context_recovery>")
-    || text.startsWith("<codex_internal_continuation_recovery>")
-    || text.startsWith("<codex_internal_retry>")
-    || text.startsWith("<recommended_plugins>")
-    || text.startsWith("<permissions instructions>")
-    || text.startsWith("<app-context>")
-    || text.startsWith("<codex_document_context>")
-    || /^# AGENTS\.md instructions(?:\r?\n|$)/.test(text)
-    || /^<skill>\s*<name>[^<]+<\/name>\s*<path>[^<]+SKILL\.md<\/path>/.test(text);
 }
 
 function isInternalRuntimeUserMessage(item: ThreadItem): boolean {
@@ -10856,6 +10843,7 @@ export function App() {
     const projectId = subagentReview?.projectId;
     const parentThreadId = subagentReview?.threadId;
     const kind = itemKind(item);
+    if (isInternalRuntimeUserMessage(item)) return null;
     if (parseAgentOperation(item)) return <SubagentToolCard item={item} onOpenAgent={openSubagentReview} knownAgents={conversationAgents} />;
     if (kind === "reasoning") {
       return reasoningItemDisplayText(item) ? renderToolBundleGroup(bundleId, [item], 0, agentId, projectId, turn.id, { readOnly: true }) : null;
