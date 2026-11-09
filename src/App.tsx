@@ -10502,6 +10502,9 @@ export function App() {
         return;
       }
       const params = notification.params ?? {};
+      if (["item/started", "item/completed"].includes(notification.method ?? "") && (params.item as {type?:unknown}|undefined)?.type === "commandExecution") {
+        window.dispatchEvent(new CustomEvent(conversationTasksEvent, { detail: { userId: selectedUserId, threadId: params.threadId } }));
+      }
       if (notification.method === "runtime/claudeTasks") {
         window.dispatchEvent(new CustomEvent(conversationTasksEvent, { detail: { userId: selectedUserId, threadId: params.threadId } }));
         return;
@@ -10841,6 +10844,7 @@ export function App() {
   function closeSubagentReview() {
     for (const frame of subagentPanelFramesRef.current) window.cancelAnimationFrame(frame);
     setSubagentPanelVisible(false);
+    if (rightWorkspaceTab === 'agents' && window.matchMedia('(max-width: 720px)').matches) setRightWorkspaceOpen(false);
     if (subagentPanelCloseTimerRef.current !== null) window.clearTimeout(subagentPanelCloseTimerRef.current);
     subagentPanelCloseTimerRef.current = window.setTimeout(() => {
       setSubagentReview(null);

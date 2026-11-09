@@ -9,15 +9,15 @@ const output=process.env.CONVERSATION_TASKS_QA_OUTPUT||'output/qa/conversation-t
 try{
   for(const mobile of [false,true]){
     const context=await browser.newContext({viewport:mobile?{width:393,height:852}:{width:1440,height:1000},serviceWorkers:'block'});
-    const errors=[],writes=[];let readsA=0,readsB=0;
+    const errors=[],writes=[];let readsA=0,readsB=0,supportsBackground=true;
     const tasks=[{id:'agent-a',kind:'agent',description:'检查接口',status:'running',background:true,lastToolName:'Read',summary:'正在检查接口',usage:{totalTokens:120,toolUses:3,durationMs:2000}},
       {id:'shell-a',kind:'shell',description:'运行测试',status:'running',background:true,summary:'测试已经启动'},
       {id:'shell-old',kind:'shell',description:'已结束的构建',status:'completed',background:true,summary:'构建成功'}];
     await context.route('**/api/**',route=>{
       if(route.request().method()!=='GET'){writes.push(route.request().method());return route.abort();}
       const pathname=new URL(route.request().url()).pathname;
-      if(pathname.endsWith('/thread-a/tasks')){readsA++;return route.fulfill({json:{supported:true,data:tasks}});}
-      if(pathname.endsWith('/thread-b/tasks')){readsB++;return route.fulfill({json:{supported:true,data:[{id:'shell-b',kind:'shell',description:'Bob 的任务',status:'completed',background:true,summary:'Bob 的结果'}]}});}
+      if(pathname.endsWith('/thread-a/tasks')){readsA++;return route.fulfill({json:{supported:supportsBackground,data:supportsBackground?tasks:[]}});}
+      if(pathname.endsWith('/thread-b/tasks')){readsB++;return route.fulfill({json:{supported:supportsBackground,data:supportsBackground?[{id:'shell-b',kind:'shell',description:'Bob 的任务',status:'completed',background:true,summary:'Bob 的结果'}]:[]}});}
       return route.abort();
     });
     await context.routeWebSocket('**',socket=>socket.close());
@@ -41,9 +41,9 @@ try{
     await trigger.click();await page.evaluate(()=>window.changeTaskScope());await expect(dialog).toHaveCount(0);await page.locator('.conversationTasksTrigger').click();
     const bob=page.getByRole('dialog',{name:'子代理与后台任务'});await expect(bob).toContainText('Bob 的任务');await expect(bob).not.toContainText('检查接口');
     const before=readsB;await page.evaluate(()=>window.dispatchEvent(new CustomEvent('codex:conversation-tasks',{detail:{userId:'alice',threadId:'thread-a'}})));await page.waitForTimeout(150);assert.equal(readsB,before);
-    await bob.getByRole('button',{name:'关闭会话任务'}).click();await expect(bob).toHaveCount(0);await page.getByRole('button',{name:'切换运行引擎'}).click();
-    const beforeCodex=readsB;await page.locator('.conversationTasksTrigger').click();const codex=page.getByRole('dialog',{name:'子代理',exact:true});await expect(codex).toContainText('当前会话暂无子代理');await expect(codex.getByRole('tab',{name:'后台任务'})).toHaveCount(0);assert.equal(readsB,beforeCodex);
-    await codex.getByRole('button',{name:'关闭会话任务'}).click();await page.evaluate(()=>window.changeTaskScope());await page.getByRole('button',{name:'切换运行引擎'}).click();await page.locator('.conversationTasksTrigger').click();
+    await bob.getByRole('button',{name:'关闭会话任务'}).click();await expect(bob).toHaveCount(0);supportsBackground=false;await page.getByRole('button',{name:'切换运行引擎'}).click();
+    const beforeCodex=readsB;await page.locator('.conversationTasksTrigger').click();const codex=page.getByRole('dialog',{name:'子代理',exact:true});await expect(codex).toContainText('当前会话暂无子代理');await expect(codex.getByRole('tab',{name:'后台任务'})).toHaveCount(0);assert.ok(readsB>beforeCodex);
+    await codex.getByRole('button',{name:'关闭会话任务'}).click();await expect(codex).toHaveCount(0);supportsBackground=true;await page.evaluate(()=>window.dispatchEvent(new CustomEvent('codex:conversation-tasks',{detail:{userId:'bob',threadId:'thread-b'}})));await page.locator('.conversationTasksTrigger').click();const gptTasks=page.getByRole('dialog',{name:'子代理与后台任务'});await expect(gptTasks.getByRole('tab',{name:'后台任务'})).toBeVisible();await expect(gptTasks).toContainText('Bob 的任务');await gptTasks.getByRole('button',{name:'关闭会话任务'}).click();await expect(gptTasks).toHaveCount(0);await page.evaluate(()=>window.changeTaskScope());await page.getByRole('button',{name:'切换运行引擎'}).click();await page.locator('.conversationTasksTrigger').click();
     await expect(page.getByLabel('会话任务列表').locator('.conversationTaskRow')).toHaveCount(4);
     await page.evaluate(()=>Promise.all(document.getAnimations().filter(animation=>animation.effect?.getTiming().iterations!==Infinity).map(animation=>animation.finished.catch(()=>{}))));
     await page.screenshot({path:`${output}/${mobile?'phone':'desktop'}-list.png`});

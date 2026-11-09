@@ -1,4 +1,5 @@
 import { claudePendingProfiles, isReclaudeModel } from "../shared/agentRuntime.js";
+import { CodexBackgroundTasks } from './codexBackgroundTasks.js';
 import { assertRuntimeModel, effectiveRuntimeModel, getClaudeService } from "./claudeService.js";
 import { getRuntimeHistoryTransfer } from "./runtimeHistoryTransfer.js";
 import fs from "node:fs";
@@ -3042,6 +3043,8 @@ function deferLargeToolOutputs(threadValue: unknown): void {
 export function registerRoutes(app: FastifyInstance, bridge: CodexBridge, store: ProjectStore, options: { backgroundIndexing?: boolean; browserTools?: boolean } = {}): void {
   const availableModelProfiles = () => listModelProfiles(isAccountPoolBridge(bridge) ? bridge.modelCatalogTargets().map(target => target.catalogPath) : []);
   const claudeService = getClaudeService(bridge);
+  const backgroundTasks = new CodexBackgroundTasks(bridge, store);
+  app.addHook('onClose', async () => { backgroundTasks.close(); });
   const historyTransfers = getRuntimeHistoryTransfer(bridge,store);
   registerProviderQuotaRoutes(app, request => userIdFromRequest(request, store));
   registerSideChatRoutes(app, bridge, store, request => userIdFromRequest(request, store));
@@ -4205,7 +4208,7 @@ export function registerRoutes(app: FastifyInstance, bridge: CodexBridge, store:
       const userId=userIdFromRequest(request,store),project=store.getProject(request.params.id,userId);
       if(!project)return reply.code(404).send({error:'Project not found.'});
       if(!store.userCanAccessThread(request.params.threadId,userId,project.id))return reply.code(403).send({error:'Thread is not visible for this logged-in user.'});
-      return claudeService?.owns(request.params.threadId)?claudeService.tasks(userId,request.params.threadId):{data:[],supported:false};
+      return claudeService?.owns(request.params.threadId)?claudeService.tasks(userId,request.params.threadId):await backgroundTasks.read(userId,request.params.threadId);
     }catch(error){return reply.code(errorStatus(error)).send({error:error instanceof Error?error.message:String(error)});}
   });
 

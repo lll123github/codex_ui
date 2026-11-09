@@ -1,3 +1,4 @@
+import type { StoredBackgroundTask } from './codexBackgroundTasks.js';
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -278,8 +279,21 @@ export class ProjectStore {
       thread_id TEXT NOT NULL, item_id TEXT NOT NULL, user_id TEXT NOT NULL,
       answer_json TEXT NOT NULL, PRIMARY KEY(thread_id, item_id)
     )`);
+    this.db.exec(`CREATE TABLE IF NOT EXISTS background_task_state (
+      thread_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, tasks_json TEXT NOT NULL
+    )`);
     this.sideChats = new SideChatStore(this.db, this);
     this.communication = new SessionCommunicationStore(this.db, this);
+  }
+
+  getBackgroundTasks(threadId: string, userId: string): StoredBackgroundTask[] {
+    const row = this.db.prepare('SELECT tasks_json FROM background_task_state WHERE thread_id=? AND user_id=?').get(threadId, userId) as {tasks_json:string}|undefined;
+    return row ? JSON.parse(row.tasks_json) : [];
+  }
+  saveBackgroundTasks(threadId: string, userId: string, tasks: StoredBackgroundTask[]): void {
+    if (this.getThreadOwner(threadId)?.userId !== userId) throw Error('Background task owner mismatch');
+    this.db.prepare('INSERT INTO background_task_state(thread_id,user_id,tasks_json) VALUES(?,?,?) ON CONFLICT(thread_id) DO UPDATE SET user_id=excluded.user_id,tasks_json=excluded.tasks_json')
+      .run(threadId, userId, JSON.stringify(tasks.slice(0, 100)));
   }
 
   getQuestionAnswer(threadId: string, itemId: string, userId: string): unknown | null {

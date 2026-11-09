@@ -88,8 +88,9 @@ export function ConversationTasks({ userId, projectId, threadId, native, agents,
   const agentCount = Math.max(entries.filter(row => row.kind === "agent").length, directoryPage?.total ?? 0);
   const running = Math.max(entries.filter(row => row.kind === "agent" && isActiveAgent(row)).length, directoryPage?.activeCount ?? 0)
     + entries.filter(row => row.kind !== "agent" && isActiveAgent(row)).length;
-  const label = native ? "子代理与后台任务" : "子代理";
+  const supportsBackground = native || state.supported;
+  const label = supportsBackground ? "子代理与后台任务" : "子代理";
   return <><button type="button" className="iconTextButton v2FastModeButton conversationTasksTrigger" aria-label={label} title={`${label} · ${running ? `${running} 项进行中` : `${agentCount + entries.filter(row => row.kind !== "agent").length} 项记录`}`} aria-haspopup="dialog" aria-expanded={open} onClick={() => { setOpening(value => value + 1); setOpen(true); state.refresh(); }}>
     <span>任务</span>{running ? <span className="conversationTasksCount" aria-label={`${running} 项进行中`} aria-live="polite">{running}</span> : null}<AccountUpdateIndicator userId={userId} menuOpen={open} target="tasks"/>
-  </button>{open ? <TasksDialog key={opening} entries={entries} native={native} agentTotal={agentCount} error={state.error} loading={state.loading} onRefresh={state.refresh} onClose={() => setOpen(false)} onOpenAgent={onOpenAgent} onOpenHistory={onOpenHistory}/> : null}</>;
+  </button>{open ? <TasksDialog key={opening} entries={entries} native={supportsBackground} agentTotal={agentCount} error={state.error} loading={state.loading} onRefresh={state.refresh} onClose={() => setOpen(false)} onOpenAgent={onOpenAgent} onOpenHistory={onOpenHistory}/> : null}</>;
 }
